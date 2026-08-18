@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "kb-attendance-lynje-2026"
+  },
+  "targets": {
+    "kb-attendance-lynje-2026": {
+      "hosting": {
+        "checkin": [
+          "kb-checkin"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
