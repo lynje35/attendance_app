@@ -3947,6 +3947,13 @@ class _WorkPageState extends State<WorkPage>
       },
       child: Scaffold(
         appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            tooltip: '로그인 화면으로 돌아가기',
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+          ),
           title: const Text('출퇴근 관리'),
         ),
         body: SafeArea(
