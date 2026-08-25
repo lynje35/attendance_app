@@ -3024,9 +3024,9 @@ class _WorkPageState extends State<WorkPage>
       }
 
       debugPrint(
-        '[확정후상세] 마지막행캐시=${actionDiag['postCommitLastRowHintMs'] ?? '-'}ms / '
-        '근무캐시묶음=${actionDiag['postCommitOpenHintMs'] ?? '-'}ms / '
-        '속성묶음=${actionDiag['postCommitPropertyBatchMs'] ?? '-'}ms / '
+        '[확정후상세] 행힌트=${actionDiag['postCommitLastRowHintMs'] ?? '-'}ms / '
+        '열린행힌트=${actionDiag['postCommitOpenHintMs'] ?? '-'}ms / '
+        '상태캐시=${actionDiag['postCommitStatusCacheMs'] ?? '-'}ms / '
         '응답조립=${actionDiag['postCommitResultBuildMs'] ?? '-'}ms / '
         '확정후전체=${actionDiag['postCommitTotalMs'] ?? '-'}ms',
       );
