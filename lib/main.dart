@@ -1649,6 +1649,10 @@ class _WorkPageState extends State<WorkPage>
 
   late String currentPassword;
 
+  // 로그인/status에서 서버가 발급한 짧은 수명의 출퇴근 액션 토큰입니다.
+  // 토큰이 없거나 만료되면 서버가 기존 비밀번호 인증으로 자동 복귀합니다.
+  String? actionToken;
+
   final TextEditingController noteController =
       TextEditingController();
 
@@ -1752,6 +1756,7 @@ class _WorkPageState extends State<WorkPage>
   Future<void> _finishLoginVerification() async {
     try {
       final data = await widget.loginFuture;
+      _captureActionToken(data);
 
       final loginDiag = data['_apiDiag'];
       if (loginDiag is Map) {
@@ -1865,6 +1870,14 @@ class _WorkPageState extends State<WorkPage>
       return await loginReadyCompleter.future;
     } catch (_) {
       return false;
+    }
+  }
+
+  void _captureActionToken(Map<String, dynamic> data) {
+    final token = data['actionToken']?.toString().trim() ?? '';
+
+    if (token.isNotEmpty) {
+      actionToken = token;
     }
   }
 
@@ -2745,6 +2758,18 @@ class _WorkPageState extends State<WorkPage>
   ) async {
     final action = body['action']?.toString() ?? '';
     final shouldDiagNetwork = action == 'clockIn' || action == 'clockOut';
+
+    final currentActionToken = actionToken;
+    if (currentActionToken != null && currentActionToken.isNotEmpty) {
+      body['actionToken'] = currentActionToken;
+    }
+
+    final clientSentAtMs = DateTime.now().millisecondsSinceEpoch;
+
+    if (shouldDiagNetwork) {
+      body['_clientSentAtMs'] = clientSentAtMs;
+    }
+
     final totalWatch = Stopwatch()..start();
 
     // Flutter Web은 브라우저 CORS 규칙을 따르므로 application/json POST를
@@ -2774,7 +2799,17 @@ class _WorkPageState extends State<WorkPage>
         throw Exception('서버 응답 오류: ${response.statusCode}');
       }
 
-      return jsonDecode(response.body) as Map<String, dynamic>;
+      final decoded =
+          jsonDecode(response.body) as Map<String, dynamic>;
+
+      if (shouldDiagNetwork) {
+        decoded['_clientSentAtMs'] = clientSentAtMs;
+        decoded['_clientReceivedAtMs'] =
+            DateTime.now().millisecondsSinceEpoch;
+      }
+
+      _captureActionToken(decoded);
+      return decoded;
     }
 
     // Android/iOS 네이티브 경로는 기존 정상 운영 코드를 그대로 유지합니다.
@@ -2843,8 +2878,12 @@ class _WorkPageState extends State<WorkPage>
           '${jsonWatch.elapsedMilliseconds}ms / '
           '네트워크전체=${totalWatch.elapsedMilliseconds}ms',
         );
+        decoded['_clientSentAtMs'] = clientSentAtMs;
+        decoded['_clientReceivedAtMs'] =
+            DateTime.now().millisecondsSinceEpoch;
       }
 
+      _captureActionToken(decoded);
       return decoded;
     }
 
@@ -2865,8 +2904,12 @@ class _WorkPageState extends State<WorkPage>
         '${jsonWatch.elapsedMilliseconds}ms / '
         '네트워크전체=${totalWatch.elapsedMilliseconds}ms',
       );
+      decoded['_clientSentAtMs'] = clientSentAtMs;
+      decoded['_clientReceivedAtMs'] =
+          DateTime.now().millisecondsSinceEpoch;
     }
 
+    _captureActionToken(decoded);
     return decoded;
   }
 
@@ -2902,8 +2945,42 @@ class _WorkPageState extends State<WorkPage>
     debugPrint(
       '[API] 인증=${apiDiag['authMs'] ?? '-'}ms / '
       '출퇴근함수=${apiDiag['actionMs'] ?? '-'}ms / '
-      'API내부전체=${apiDiag['totalMs'] ?? '-'}ms',
+      'API내부전체=${apiDiag['totalMs'] ?? '-'}ms / '
+      '인증경로=${apiDiag['authSource'] ?? '-'}',
     );
+
+    final clientSentAtMs = data['_clientSentAtMs'];
+    final commitEpochMs = actionDiag['commitEpochMs'];
+    final apiEntryEpochMs = apiDiag['apiEntryEpochMs'];
+    final apiReturnEpochMs = apiDiag['apiReturnEpochMs'];
+
+    if (clientSentAtMs is num &&
+        commitEpochMs is num &&
+        apiEntryEpochMs is num &&
+        apiReturnEpochMs is num) {
+      final buttonToCommitMs =
+          commitEpochMs.toInt() - clientSentAtMs.toInt();
+      final apiEntryToCommitMs =
+          commitEpochMs.toInt() - apiEntryEpochMs.toInt();
+      final commitToApiReturnMs =
+          apiReturnEpochMs.toInt() - commitEpochMs.toInt();
+
+      debugPrint(
+        '[실제시트확정] 버튼요청→flush완료≈${buttonToCommitMs}ms / '
+        'API진입→확정=${apiEntryToCommitMs}ms / '
+        '확정→API응답준비=${commitToApiReturnMs}ms',
+      );
+    } else {
+      // 출근 함수가 매장 검증/중복 처리 등에서 flush 전에 끝난 경우에도
+      // 진단 줄 자체가 사라지지 않도록 명확히 표시합니다.
+      debugPrint(
+        '[실제시트확정] flush 미도달 / '
+        'clientSent=${clientSentAtMs is num ? 'OK' : '없음'} / '
+        'commit=${commitEpochMs is num ? 'OK' : '없음'} / '
+        'apiEntry=${apiEntryEpochMs is num ? 'OK' : '없음'} / '
+        'apiReturn=${apiReturnEpochMs is num ? 'OK' : '없음'}',
+      );
+    }
 
     if (label == '출근') {
       debugPrint(
@@ -2914,6 +2991,44 @@ class _WorkPageState extends State<WorkPage>
         '시트준비=${actionDiag['sheetMs'] ?? '-'}ms / '
         '저장=${actionDiag['writeMs'] ?? '-'}ms / '
         '함수전체=${actionDiag['totalMs'] ?? '-'}ms',
+      );
+
+      final sheetDetailRaw = actionDiag['sheetDetail'];
+      final sheetDetail = sheetDetailRaw is Map
+          ? Map<String, dynamic>.from(sheetDetailRaw)
+          : <String, dynamic>{};
+
+      if (sheetDetail.isNotEmpty) {
+        debugPrint(
+          '[시트준비상세1] 월경로=${sheetDetail['monthPath'] ?? '-'} / '
+          '캐시=${sheetDetail['monthCacheReadMs'] ?? '-'}ms / '
+          '속성=${sheetDetail['monthPropertyReadMs'] ?? '-'}ms / '
+          '시트ID=${sheetDetail['monthGetByIdMs'] ?? '-'}ms / '
+          '폴백탐색=${sheetDetail['monthFallbackLookupMs'] ?? '-'}ms / '
+          '생성준비=${sheetDetail['monthCreateSetupMs'] ?? '-'}ms / '
+          '힌트쓰기=${sheetDetail['monthHintWriteMs'] ?? '-'}ms / '
+          '월시트전체=${sheetDetail['monthSheetTotalMs'] ?? '-'}ms',
+        );
+        debugPrint(
+          '[시트준비상세2] 행경로=${sheetDetail['nextRowPath'] ?? '-'} / '
+          '캐시=${sheetDetail['nextRowCacheReadMs'] ?? '-'}ms / '
+          '속성=${sheetDetail['nextRowPropertyReadMs'] ?? '-'}ms / '
+          'getLastRow=${sheetDetail['nextRowGetLastRowMs'] ?? '-'}ms / '
+          'probe=${sheetDetail['nextRowProbeMs'] ?? '-'}ms / '
+          '힌트삭제=${sheetDetail['nextRowClearHintMs'] ?? '-'}ms / '
+          '폴백getLastRow=${sheetDetail['nextRowFallbackGetLastRowMs'] ?? '-'}ms / '
+          'A열전체=${sheetDetail['nextRowFullScanMs'] ?? '-'}ms / '
+          '힌트쓰기=${sheetDetail['nextRowHintWriteMs'] ?? '-'}ms / '
+          '다음행전체=${sheetDetail['nextRowTotalMs'] ?? '-'}ms',
+        );
+      }
+
+      debugPrint(
+        '[확정후상세] 마지막행캐시=${actionDiag['postCommitLastRowHintMs'] ?? '-'}ms / '
+        '근무캐시묶음=${actionDiag['postCommitOpenHintMs'] ?? '-'}ms / '
+        '속성묶음=${actionDiag['postCommitPropertyBatchMs'] ?? '-'}ms / '
+        '응답조립=${actionDiag['postCommitResultBuildMs'] ?? '-'}ms / '
+        '확정후전체=${actionDiag['postCommitTotalMs'] ?? '-'}ms',
       );
     } else {
       debugPrint(
