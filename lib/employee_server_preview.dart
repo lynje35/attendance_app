@@ -96,7 +96,15 @@ class EmployeeServerPreview {
       for (final key in keys) if (original.containsKey(key)) key: original[key],
     };
     if (action == 'clockIn' || action == 'clockOut') {
-      final intent = await _stored(() => _readIntent(action, employee));
+      var intent = await _stored(() => _readIntent(action, employee));
+      // A checkout intent can be created before this session's own recordId cache is
+      // populated (fresh resume, or immediately after clock-in). If a valid recordId has
+      // since arrived, backfill it into the same requestId/store/note instead of failing.
+      if (action == 'clockOut' && intent != null && intent['recordId'] == null &&
+          intent['store'] == original['selectedStore'] && _recordIds[employee] != null) {
+        intent = {...intent, 'recordId': _recordIds[employee]};
+        await _stored(() => write(_key(action, employee), jsonEncode(intent)));
+      }
       if (intent == null || intent['store'] != original['selectedStore'] ||
           (action == 'clockOut' && intent['recordId'] == null)) {
         return {'success': false, 'message': '저장 요청 정보를 확인하지 못했습니다. 현재 상태를 다시 확인해 주세요.'};

@@ -58,6 +58,40 @@ void main() {
     expect(requests.last['recordId'], 'shift-a');
     expect(requests.last['note'], 'original');
   });
+  test('backfills a checkout intent recorded before recordId was known, keeping the same requestId', () async {
+    final adapter = bridge();
+    const key = 'employee_server_preview_request_clockOut_test';
+    await adapter.prepareIntent('clockOut', 'test', 'store');
+    final saved = Map<String, dynamic>.from(jsonDecode(storage[key]!));
+    expect(saved['recordId'], null);
+    final requestId = saved['requestId'];
+    await adapter.send(body('status'));
+    final result = await adapter.send(body('clockOut'));
+    expect(result['success'], true);
+    expect(requests.last['recordId'], 'shift-a');
+    expect(requests.last['requestId'], requestId);
+  });
+  test('an intent that already has a recordId is never overwritten by a later cache value', () async {
+    final adapter = bridge();
+    await adapter.send(body('status'));
+    await adapter.prepareIntent('clockOut', 'test', 'store');
+    response = (_) async => json(status('shift-b'));
+    await adapter.send(body('status'));
+    await adapter.send(body('clockOut'));
+    expect(requests.last['recordId'], 'shift-a');
+  });
+  test('immediate checkout queued right after clock-in recovers via the same backfill', () async {
+    final adapter = bridge();
+    const key = 'employee_server_preview_request_clockOut_test';
+    await adapter.prepareIntent('clockOut', 'test', 'store');
+    final requestId = Map<String, dynamic>.from(jsonDecode(storage[key]!))['requestId'];
+    await adapter.prepareIntent('clockIn', 'test', 'store');
+    await adapter.send(body('clockIn'));
+    final result = await adapter.send(body('clockOut'));
+    expect(result['success'], true);
+    expect(requests.last['recordId'], 'shift-a');
+    expect(requests.last['requestId'], requestId);
+  });
   test('missing persisted intent or checkout target never sends a write', () async {
     final adapter = bridge();
     expect((await adapter.send(body('clockIn')))['success'], false);
