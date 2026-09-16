@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "kb-attendance-lynje-updates",
+    "public": "build/android-update-metadata",
+    "ignore": ["**/.*"],
+    "headers": [
+      {
+        "source": "/latest.json",
+        "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0" }]
+      }
+    ]
+  }
+}

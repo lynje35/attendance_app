@@ -35,6 +35,13 @@ android {
     }
 
     signingConfigs {
+        // Keep the certificate of the APK already installed by employees.
+        create("employeeUpdate") {
+            storeFile = rootProject.file("employee-update.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as String
             keyPassword = keystoreProperties["keyPassword"] as String
@@ -45,7 +52,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName("employeeUpdate")
         }
     }
 }
