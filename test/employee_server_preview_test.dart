@@ -42,7 +42,7 @@ void main() {
     await bridge().send(body('clockIn'));
     expect(requests.last['requestId'], id);
     expect(requests.last.containsKey('_clientSentAtMs'), false);
-    expect(requests.last.containsKey('actionToken'), false);
+    expect(requests.last['actionToken'], 'ignored');
     await first.prepareIntent('clockIn', 'test', 'store');
     await first.send(body('clockIn'));
     expect(requests.last['requestId'], id);
@@ -136,9 +136,20 @@ void main() {
   test('calendar and password payloads follow server contract; maintenance makes no network request', () async {
     final adapter = bridge();
     await adapter.send({...body('calendar'), 'year': 2026, 'month': 9});
+    expect(requests.last.keys.toSet(), {'action','employeeId','password','year','month','actionToken'});
+    expect(requests.last['actionToken'], 'ignored');
+    expect(requests.last['year'], 2026);
+    expect(requests.last['month'], 9);
+    // Without a token nothing is invented: the field stays absent, exactly as before.
+    await adapter.send({...body('calendar'), 'year': 2026, 'month': 9}..remove('actionToken'));
     expect(requests.last.keys.toSet(), {'action','employeeId','password','year','month'});
+    // Actions that never use a session token still drop it, and calendar never gains write fields.
     await adapter.send({...body('changePassword'), 'currentPassword': '1234', 'newPassword': '4321', 'confirmPassword': '4321'});
     expect(requests.last.keys.toSet(), {'action','employeeId','currentPassword','newPassword','confirmPassword'});
+    await adapter.send({...body('bootstrap')});
+    expect(requests.last.keys.toSet(), {'action'});
+    await adapter.send({...body('calendar'), 'year': 2026, 'month': 9, 'requestId': 'x', 'recordId': 'y', 'note': 'z'});
+    expect(requests.last.keys.toSet(), {'action','employeeId','password','year','month','actionToken'});
     final count = requests.length;
     await adapter.send(body('maintenance'));
     expect(requests.length, count);

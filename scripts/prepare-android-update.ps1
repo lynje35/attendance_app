@@ -13,7 +13,7 @@ try {
         $previous = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
         if ($VersionCode -le $previous.versionCode) { throw 'VersionCode must exceed the previous prepared update.' }
     }
-    & flutter build apk --release --build-number $VersionCode --build-name $VersionName --dart-define=EMPLOYEE_API_URL=https://attendance-employee-api.lynje.workers.dev/employee/api
+    & flutter build apk --release --build-number $VersionCode --build-name $VersionName --dart-define=EMPLOYEE_API_URL=https://attendance-employee-api.lynje.workers.dev/employee/api --dart-define=APP_VERSION=$VersionName
     if ($LASTEXITCODE -ne 0) { throw 'APK build failed.' }
 
     $localSettings = Get-Content android/local.properties

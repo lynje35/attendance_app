@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'employee_server_preview.dart';
+import 'calculator_page.dart';
 
 EmployeeServerPreview? employeeServerPreview;
 
@@ -516,6 +518,78 @@ Future<void> clearPendingClockOut(String employeeId) async {
   } catch (_) {}
 }
 
+String hourlyWageKey(String employeeId) {
+  return 'attendance_hourly_wage_v1_$employeeId';
+}
+
+String actionTokenKey(String employeeId) {
+  return 'attendance_action_token_v1_$employeeId';
+}
+
+// Diagnostics only: mirrors EmployeeServerPreview's own (private) pending-intent
+// key so a request/response log line can show the requestId/recordId already
+// staged for this clockIn/clockOut, without changing that class's behavior.
+Future<Map<String, dynamic>?> _readAttendanceIntentForDiag(
+  String action,
+  String employeeId,
+) async {
+  try {
+    final raw = await secureStorage.read(
+      key: 'employee_server_preview_request_${action}_$employeeId',
+    );
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) return null;
+    return Map<String, dynamic>.from(decoded);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Optional, set via --dart-define=APP_VERSION=... at build time; empty by
+// default so no existing build command needs to change for this to work.
+const String _appVersionForDiag = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '',
+);
+
+String get _platformForDiag {
+  if (kIsWeb) return 'web';
+  return defaultTargetPlatform.name;
+}
+
+// Best-effort, fire-and-forget diagnostic upload for attendance FAILURE paths
+// only (never for an ordinary success, and never for status polling). This
+// must never throw into, delay, or otherwise affect the real
+// clockIn/clockOut/verify flow, and it deliberately posts directly instead of
+// going through callApi/EmployeeServerPreview.send so a diagnostic failure
+// can never recursively trigger another diagnostic send.
+void _sendAttendanceDiag(Map<String, dynamic> fields) {
+  final preview = employeeServerPreview;
+  if (preview == null) return;
+
+  unawaited(() async {
+    try {
+      final body = <String, dynamic>{
+        'action': 'attendanceDiag',
+        'appVersion': _appVersionForDiag,
+        'platform': _platformForDiag,
+        'timestamp': DateTime.now().toIso8601String(),
+        ...fields,
+      };
+      await preview.client
+          .post(
+            preview.endpoint,
+            headers: {'Content-Type': 'text/plain; charset=UTF-8'},
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('[ATTENDANCE_CLIENT_DIAG_SEND_FAILED] $e');
+    }
+  }());
+}
+
 Future<void> saveBootstrapCache(Map<String, dynamic> data) async {
   final stores = data['stores'];
   final employees = data['employees'];
@@ -697,6 +771,14 @@ class _LoginPageState extends State<LoginPage>
     );
   }
 
+  // 이 직원의 저장된 세션 토큰(없거나 읽기 실패 시 null). 서버가 검증하므로 만료/무효여도 안전합니다.
+  Future<String?> _readSavedActionToken(String employeeId) async {
+    try {
+      final saved = await secureStorage.read(key: actionTokenKey(employeeId));
+      if (saved != null && saved.isNotEmpty && saved.length <= 512) return saved;
+    } catch (_) {}
+    return null;
+  }
 
   bool _matchesStartupStatusRequest({
     required String employeeId,
@@ -905,12 +987,18 @@ class _LoginPageState extends State<LoginPage>
         startupStatusPassword = password;
         startupStatusStore = store;
         startupStatusPasswordGeneration = _verifiedPasswordGeneration(employeeId);
-        startupStatusFuture = callApi({
-          'action': 'status',
-          'employeeId': employeeId,
-          'password': password,
-          'selectedStore': store,
-        });
+        // 기억된 비밀번호는 이전에 서버 인증을 통과한 값이므로 저장된 세션 토큰을 함께 보냅니다.
+        // 토큰이 없거나 무효면 서버가 기존처럼 비밀번호 검증 후 새 토큰을 발급합니다.
+        startupStatusFuture = () async {
+          final savedToken = await _readSavedActionToken(employeeId);
+          return callApi({
+            'action': 'status',
+            'employeeId': employeeId,
+            'password': password,
+            'selectedStore': store,
+            'actionToken': ?savedToken,
+          });
+        }();
 
         // 자동로그인 화면 준비보다 서버 오류가 먼저 도착해도
         // Future 오류가 미처리 상태로 남지 않게 감시만 붙여 둡니다.
@@ -1106,6 +1194,8 @@ class _LoginPageState extends State<LoginPage>
       store: store,
     );
 
+    String? savedActionToken;
+
     Future<Map<String, dynamic>> makeStatusFuture() {
       if (canReuseStartupStatus) {
         passwordGeneration = startupStatusPasswordGeneration ?? passwordGeneration;
@@ -1118,6 +1208,7 @@ class _LoginPageState extends State<LoginPage>
         'employeeId': employeeId,
         'password': password,
         'selectedStore': store,
+        'actionToken': ?savedActionToken,
       });
     }
 
@@ -1136,6 +1227,7 @@ class _LoginPageState extends State<LoginPage>
     Map<String, dynamic>? serverConfirmedAttendance;
     bool locallyVerified = false;
     try {
+      final savedTokenFuture = _readSavedActionToken(employeeId);
       // 전체 직원 프리로드를 기다리지 않고 선택한 직원의 검증값만 확인합니다.
       String? localPassword = _verifiedPasswordValues.containsKey(employeeId)
           ? _verifiedPasswordValues[employeeId]
@@ -1147,9 +1239,14 @@ class _LoginPageState extends State<LoginPage>
           // 저장소를 읽지 못하면 서버 인증으로 판단합니다.
         }
       }
+      final savedToken = await savedTokenFuture;
       if (!mounted) return;
       passwordGeneration = _verifiedPasswordGeneration(employeeId);
       locallyVerified = localPassword == password;
+      // 서버는 세션 토큰이 유효하면 입력한 비밀번호를 다시 대조하지 않습니다.
+      // 그래서 이 기기에서 이미 서버 인증된 비밀번호와 같을 때만 저장된 토큰을 씁니다.
+      // 처음 입력하거나 다른 비밀번호면 토큰 없이 보내 기존처럼 서버가 비밀번호를 검증합니다.
+      savedActionToken = locallyVerified ? savedToken : null;
       statusFuture = makeStatusFuture();
       // 캐시 읽기 중 서버 오류가 먼저 도착해도 미처리 오류로 남기지 않습니다.
       unawaited(statusFuture.then<void>((_) {}, onError: (Object _, StackTrace _) {}));
@@ -1408,7 +1505,7 @@ class _LoginPageState extends State<LoginPage>
                                 ),
                                 const SizedBox(height: 8),
                                 const Text(
-                                  '근무할 매장과 직원을 선택해주세요.',
+                                  '직원 선택 시 기본 근무 매장이 자동으로 설정돼요.',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 14,
@@ -1442,7 +1539,7 @@ class _LoginPageState extends State<LoginPage>
                                   ),
                                   initialValue: selectedStore,
                                   decoration: InputDecoration(
-                                    labelText: '매장 선택',
+                                    labelText: '근무 매장',
                                     labelStyle: const TextStyle(
                                       color: Color(0xFF24365B),
                                       fontWeight: FontWeight.w600,
@@ -2089,7 +2186,25 @@ class _WorkPageState extends State<WorkPage>
     // 로그인 화면에서 이미 시작해 둔 서버 요청의 결과만 기다립니다.
     // 화면은 먼저 열린 상태이고, 확인중/로딩 문구 없이
     // 서버 결과만 뒤에서 조용히 반영합니다.
-    _finishLoginVerification();
+    unawaited(_restoreActionTokenThenFinishLogin());
+  }
+
+  // 저장된 actionToken을 먼저 복원한 뒤에만 로그인 검증(및 그 안에서 이어지는
+  // 미완료 출퇴근 복구)을 진행합니다 — 그래야 이 화면에서 나가는 첫 요청부터
+  // 세션을 재사용하고, 매번 새로 비밀번호 인증을 타지 않습니다.
+  Future<void> _restoreActionTokenThenFinishLogin() async {
+    try {
+      final saved = await secureStorage.read(
+        key: actionTokenKey(widget.employeeId),
+      );
+      if (saved != null && saved.isNotEmpty) {
+        actionToken = saved;
+      }
+    } catch (_) {
+      debugPrint('[ACTION_TOKEN] restored=false');
+    }
+
+    await _finishLoginVerification();
   }
 
   @override
@@ -2373,6 +2488,18 @@ class _WorkPageState extends State<WorkPage>
 
     if (token.isNotEmpty) {
       actionToken = token;
+
+      final employeeId = widget.employeeId;
+      unawaited(() async {
+        try {
+          await secureStorage.write(
+            key: actionTokenKey(employeeId),
+            value: token,
+          );
+        } catch (_) {
+          debugPrint('[ACTION_TOKEN] saved=false');
+        }
+      }());
     }
   }
 
@@ -2712,8 +2839,8 @@ class _WorkPageState extends State<WorkPage>
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('확인'),
-          content: Text(message),
+          content: Text(message, textAlign: TextAlign.center),
+          actionsAlignment: MainAxisAlignment.center,
           actions: [
             TextButton(
               onPressed: () {
@@ -2816,7 +2943,15 @@ class _WorkPageState extends State<WorkPage>
     );
 
     if (!confirmed || !mounted) {
-      attendanceActionQueued = false;
+      // 확인창이 열려 있는 동안 다른 setState가 이미 버튼을 비활성으로 그렸을 수 있으므로
+      // 취소 시 되돌린 값을 화면에도 즉시 반영합니다.
+      if (mounted) {
+        setState(() {
+          attendanceActionQueued = false;
+        });
+      } else {
+        attendanceActionQueued = false;
+      }
       return;
     }
 
@@ -3050,6 +3185,14 @@ class _WorkPageState extends State<WorkPage>
       }
     }
 
+    try {
+      await secureStorage.delete(key: hourlyWageKey(widget.employeeId));
+    } catch (_) {}
+
+    try {
+      await secureStorage.delete(key: actionTokenKey(widget.employeeId));
+    } catch (_) {}
+
     if (!mounted) return;
 
     widget.onRememberCleared?.call();
@@ -3261,6 +3404,19 @@ class _WorkPageState extends State<WorkPage>
     String? noteBackup, {
     int attempt = 0,
   }) async {
+    final diagIntent = await _readAttendanceIntentForDiag(
+      expectedStatus == 'WORKING' ? 'clockIn' : 'clockOut',
+      widget.employeeId,
+    );
+
+    if (attempt == 0) {
+      debugPrint(
+        '[ATTENDANCE_VERIFY_START] expectedStatus=$expectedStatus '
+        'employeeId=${widget.employeeId} requestId=${diagIntent?['requestId']} '
+        'recordId=${diagIntent?['recordId']}',
+      );
+    }
+
     await Future.delayed(
       Duration(
         milliseconds: 500,
@@ -3276,6 +3432,26 @@ class _WorkPageState extends State<WorkPage>
         'password': currentPassword,
         'selectedStore': widget.store,
       });
+      debugPrint(
+        '[ATTENDANCE_VERIFY_RESPONSE] success=${data['success']} '
+        'code=${data['code']} '
+        'status=${(data['attendance'] is Map) ? (data['attendance'] as Map)['status'] : null} '
+        'message=${data['message']}',
+      );
+
+      if (data['success'] != true) {
+        _sendAttendanceDiag({
+          'event': 'ATTENDANCE_VERIFY_RESPONSE',
+          'employeeId': widget.employeeId,
+          'storeId': widget.store,
+          'requestId': diagIntent?['requestId'],
+          'recordId': diagIntent?['recordId'],
+          'expectedStatus': expectedStatus,
+          'success': data['success'],
+          'code': data['code'],
+          'message': data['message'],
+        });
+      }
 
       if (!mounted) return;
 
@@ -3372,7 +3548,25 @@ class _WorkPageState extends State<WorkPage>
           '현재 기록 상태가 예상과 달라 다시 확인했습니다.',
         );
       }
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        '[ATTENDANCE_VERIFY_EXCEPTION] expectedStatus=$expectedStatus '
+        'employeeId=${widget.employeeId} exceptionType=${e.runtimeType} '
+        'exceptionMessage=$e',
+      );
+      debugPrint('$st');
+
+      _sendAttendanceDiag({
+        'event': 'ATTENDANCE_VERIFY_EXCEPTION',
+        'employeeId': widget.employeeId,
+        'storeId': widget.store,
+        'requestId': diagIntent?['requestId'],
+        'recordId': diagIntent?['recordId'],
+        'expectedStatus': expectedStatus,
+        'exceptionType': e.runtimeType.toString(),
+        'exceptionMessage': e.toString(),
+      });
+
       if (!mounted) return;
 
       if (expectedStatus == 'WORKING') {
@@ -3562,7 +3756,17 @@ class _WorkPageState extends State<WorkPage>
       _showClockInPending();
     }
 
+    Map<String, dynamic>? diagIntent;
+
     try {
+      diagIntent = await _readAttendanceIntentForDiag('clockIn', widget.employeeId);
+      debugPrint(
+        '[ATTENDANCE_REQUEST] action=clockIn employeeId=${widget.employeeId} '
+        'storeId=${widget.store} requestId=${diagIntent?['requestId']} '
+        'recordId=${diagIntent?['recordId']} '
+        'hasActionToken=${actionToken != null && actionToken!.isNotEmpty}',
+      );
+
       final actionWatch = Stopwatch()..start();
       final data = await callApi({
         'action': 'clockIn',
@@ -3570,6 +3774,26 @@ class _WorkPageState extends State<WorkPage>
         'password': currentPassword,
         'selectedStore': widget.store,
       });
+      debugPrint(
+        '[ATTENDANCE_RESPONSE] action=clockIn success=${data['success']} '
+        'code=${data['code']} retryable=${data['retryable']} '
+        'message=${data['message']} requestId=${data['requestId']} '
+        'recordId=${data['recordId']}',
+      );
+      if (data['success'] != true && data['retryable'] == true) {
+        _sendAttendanceDiag({
+          'event': 'ATTENDANCE_RESPONSE',
+          'employeeId': widget.employeeId,
+          'storeId': widget.store,
+          'requestId': data['requestId'] ?? diagIntent?['requestId'],
+          'recordId': data['recordId'] ?? diagIntent?['recordId'],
+          'expectedStatus': 'WORKING',
+          'success': data['success'],
+          'code': data['code'],
+          'retryable': data['retryable'],
+          'message': data['message'],
+        });
+      }
       actionWatch.stop();
       _printServerErrorIfAny('clockIn', data);
       _printAttendanceActionDiag(
@@ -3636,7 +3860,25 @@ class _WorkPageState extends State<WorkPage>
         _refreshVisibleCalendarAfterAttendance();
       }
 
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        '[ATTENDANCE_REQUEST_EXCEPTION] action=clockIn '
+        'employeeId=${widget.employeeId} requestId=${diagIntent?['requestId']} '
+        'exceptionType=${e.runtimeType} exceptionMessage=$e',
+      );
+      debugPrint('$st');
+
+      _sendAttendanceDiag({
+        'event': 'ATTENDANCE_REQUEST_EXCEPTION',
+        'employeeId': widget.employeeId,
+        'storeId': widget.store,
+        'requestId': diagIntent?['requestId'],
+        'recordId': diagIntent?['recordId'],
+        'expectedStatus': 'WORKING',
+        'exceptionType': e.runtimeType.toString(),
+        'exceptionMessage': e.toString(),
+      });
+
       await _verifyAttendanceResult(
         'WORKING',
         null,
@@ -3658,7 +3900,17 @@ class _WorkPageState extends State<WorkPage>
       _showClockOutPending();
     }
 
+    Map<String, dynamic>? diagIntent;
+
     try {
+      diagIntent = await _readAttendanceIntentForDiag('clockOut', widget.employeeId);
+      debugPrint(
+        '[ATTENDANCE_REQUEST] action=clockOut employeeId=${widget.employeeId} '
+        'storeId=${widget.store} requestId=${diagIntent?['requestId']} '
+        'recordId=${diagIntent?['recordId']} '
+        'hasActionToken=${actionToken != null && actionToken!.isNotEmpty}',
+      );
+
       final actionWatch = Stopwatch()..start();
       final data = await callApi({
         'action': 'clockOut',
@@ -3667,6 +3919,26 @@ class _WorkPageState extends State<WorkPage>
         'selectedStore': widget.store,
         'note': noteBackup,
       });
+      debugPrint(
+        '[ATTENDANCE_RESPONSE] action=clockOut success=${data['success']} '
+        'code=${data['code']} retryable=${data['retryable']} '
+        'message=${data['message']} requestId=${data['requestId']} '
+        'recordId=${data['recordId']}',
+      );
+      if (data['success'] != true && data['retryable'] == true) {
+        _sendAttendanceDiag({
+          'event': 'ATTENDANCE_RESPONSE',
+          'employeeId': widget.employeeId,
+          'storeId': widget.store,
+          'requestId': data['requestId'] ?? diagIntent?['requestId'],
+          'recordId': data['recordId'] ?? diagIntent?['recordId'],
+          'expectedStatus': 'COMPLETED',
+          'success': data['success'],
+          'code': data['code'],
+          'retryable': data['retryable'],
+          'message': data['message'],
+        });
+      }
       actionWatch.stop();
       _printServerErrorIfAny('clockOut', data);
       _printAttendanceActionDiag(
@@ -3725,7 +3997,25 @@ class _WorkPageState extends State<WorkPage>
       );
       _refreshVisibleCalendarAfterAttendance();
 
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint(
+        '[ATTENDANCE_REQUEST_EXCEPTION] action=clockOut '
+        'employeeId=${widget.employeeId} requestId=${diagIntent?['requestId']} '
+        'exceptionType=${e.runtimeType} exceptionMessage=$e',
+      );
+      debugPrint('$st');
+
+      _sendAttendanceDiag({
+        'event': 'ATTENDANCE_REQUEST_EXCEPTION',
+        'employeeId': widget.employeeId,
+        'storeId': widget.store,
+        'requestId': diagIntent?['requestId'],
+        'recordId': diagIntent?['recordId'],
+        'expectedStatus': 'COMPLETED',
+        'exceptionType': e.runtimeType.toString(),
+        'exceptionMessage': e.toString(),
+      });
+
       await _verifyAttendanceResult(
         'COMPLETED',
         noteBackup,
@@ -4215,6 +4505,32 @@ class _WorkPageState extends State<WorkPage>
         ],
       ),
     );
+  }
+
+  Future<void> _openCalculator() async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => CalculatorPage(
+        loadCurrentMonthCalendar: () {
+          final now = DateTime.now();
+          return callApi({
+            'action': 'calendar',
+            'employeeId': widget.employeeId,
+            'password': currentPassword,
+            'year': now.year,
+            'month': now.month,
+          });
+        },
+        readSavedWage: () => secureStorage.read(
+          key: hourlyWageKey(widget.employeeId),
+        ),
+        saveWage: (value) => value.isEmpty
+            ? secureStorage.delete(key: hourlyWageKey(widget.employeeId))
+            : secureStorage.write(
+                key: hourlyWageKey(widget.employeeId),
+                value: value,
+              ),
+      ),
+    ));
   }
 
   Future<void> openPasswordChangeDialog() async {
@@ -4947,6 +5263,22 @@ class _WorkPageState extends State<WorkPage>
                 const SizedBox(height: 10),
                 _buildCalendar(),
               ],
+              const SizedBox(height: 14),
+              SizedBox(
+                height: 54,
+                child: OutlinedButton.icon(
+                  onPressed:
+                      !isPasswordChanging
+                          ? _openCalculator
+                          : null,
+                  icon: const Icon(Icons.calculate),
+                  label: const Text(
+                    '계산기',
+                    style:
+                        TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
               const SizedBox(height: 14),
               SizedBox(
                 height: 54,

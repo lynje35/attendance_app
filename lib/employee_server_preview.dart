@@ -86,10 +86,10 @@ class EmployeeServerPreview {
         : (_generations[employee] ?? 0);
     final keys = switch (action) {
       'bootstrap' => ['action'],
-      'status' => ['action', 'employeeId', 'password', 'selectedStore'],
-      'calendar' => ['action', 'employeeId', 'password', 'year', 'month'],
+      'status' => ['action', 'employeeId', 'password', 'selectedStore', 'actionToken'],
+      'calendar' => ['action', 'employeeId', 'password', 'year', 'month', 'actionToken'],
       'changePassword' => ['action', 'employeeId', 'currentPassword', 'newPassword', 'confirmPassword'],
-      'clockIn' || 'clockOut' => ['action', 'employeeId', 'password', 'selectedStore'],
+      'clockIn' || 'clockOut' => ['action', 'employeeId', 'password', 'selectedStore', 'actionToken'],
       _ => throw UnsupportedError('테스트에 연결되지 않은 요청입니다.'),
     };
     final body = <String, dynamic>{
