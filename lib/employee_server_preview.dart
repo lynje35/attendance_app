@@ -107,7 +107,14 @@ class EmployeeServerPreview {
       }
       if (intent == null || intent['store'] != original['selectedStore'] ||
           (action == 'clockOut' && intent['recordId'] == null)) {
-        return {'success': false, 'message': '저장 요청 정보를 확인하지 못했습니다. 현재 상태를 다시 확인해 주세요.'};
+        return {
+          'success': false,
+          // `code`/`localOnly` only label this as produced here, with no HTTP request made, so the
+          // app's diagnostics can tell it from a server rejection; the message and success are unchanged.
+          'code': intent == null ? 'INTENT_MISSING' : intent['store'] != original['selectedStore'] ? 'INTENT_STORE_MISMATCH' : 'RECORD_ID_MISSING',
+          'localOnly': true,
+          'message': '저장 요청 정보를 확인하지 못했습니다. 현재 상태를 다시 확인해 주세요.',
+        };
       }
       body['requestId'] = intent['requestId'];
       if (action == 'clockOut') {

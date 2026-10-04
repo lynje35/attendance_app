@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'employee_server_preview.dart';
 import 'calculator_page.dart';
+import 'history_first_paint.dart';
 
 EmployeeServerPreview? employeeServerPreview;
 
@@ -358,10 +359,12 @@ Future<void> savePendingClockIn({
 }) async {
   if (employeeId.isEmpty || store.isEmpty) return;
 
+  var step = 'prepareIntent';
   try {
     if (employeeServerPreview != null) {
       await employeeServerPreview!.prepareIntent('clockIn', employeeId, store);
     }
+    step = 'pendingMarker';
     await Future.wait<void>([
       secureStorage.write(
         key: pendingClockInKey(employeeId),
@@ -376,7 +379,16 @@ Future<void> savePendingClockIn({
         status: 'WORKING',
       ),
     ]);
-  } catch (_) {}
+  } catch (e) {
+    // Still swallowed exactly as before; the failure is only reported (best-effort).
+    _sendClockInDiag(
+      'CLOCK_IN_INTENT_SAVE_FAILED',
+      employeeId: employeeId,
+      store: store,
+      code: step,
+      error: e,
+    );
+  }
 }
 
 Future<bool> hasRecentPendingClockIn({
@@ -442,10 +454,12 @@ Future<void> savePendingClockOut({
 }) async {
   if (employeeId.isEmpty || store.isEmpty) return;
 
+  var step = 'prepareIntent';
   try {
     if (employeeServerPreview != null) {
       await employeeServerPreview!.prepareIntent('clockOut', employeeId, store, note: note);
     }
+    step = 'pendingMarker';
     await Future.wait<void>([
       secureStorage.write(
         key: pendingClockOutKey(employeeId),
@@ -461,7 +475,16 @@ Future<void> savePendingClockOut({
         status: 'NOT_IN',
       ),
     ]);
-  } catch (_) {}
+  } catch (e) {
+    // Still swallowed exactly as before; the failure is only reported (best-effort).
+    _sendClockOutDiag(
+      'CLOCK_OUT_INTENT_SAVE_FAILED',
+      employeeId: employeeId,
+      store: store,
+      code: step,
+      error: e,
+    );
+  }
 }
 
 Future<Map<String, dynamic>?> readRecentPendingClockOut({
@@ -590,6 +613,70 @@ void _sendAttendanceDiag(Map<String, dynamic> fields) {
   }());
 }
 
+// clockIn-only diagnostics (CLOCK_IN_TAPPED / _SKIPPED / _CONFIRM_CANCELLED / _INTENT_SAVE_FAILED /
+// _LOCAL_FAIL / _NONRETRYABLE_FAIL). Same best-effort channel as above; one row per tap, skip, cancel,
+// local failure or non-retryable rejection — never for a success and never carrying the PIN, password or
+// action token (only flags about them). `message` defaults to nothing: callers pass a small JSON state
+// snapshot or the server's own message.
+void _sendClockInDiag(
+  String event, {
+  required String employeeId,
+  required String store,
+  String? code,
+  String? message,
+  String? requestId,
+  String? recordId,
+  bool? success,
+  bool? retryable,
+  Object? error,
+}) {
+  _sendAttendanceDiag({
+    'event': event,
+    'employeeId': employeeId,
+    'storeId': store,
+    'requestId': requestId,
+    'recordId': recordId,
+    'expectedStatus': 'WORKING',
+    'success': success,
+    'code': code,
+    'retryable': retryable,
+    'message': message,
+    if (error != null) 'exceptionType': error.runtimeType.toString(),
+    if (error != null) 'exceptionMessage': error.toString(),
+  });
+}
+
+// clockOut counterpart of _sendClockInDiag (CLOCK_OUT_* events, expected_status COMPLETED): same
+// best-effort channel, same rules — one row per tap/skip/cancel/save failure/local failure/non-retryable
+// rejection, never for a success, never the PIN, password or action token.
+void _sendClockOutDiag(
+  String event, {
+  required String employeeId,
+  required String store,
+  String? code,
+  String? message,
+  String? requestId,
+  String? recordId,
+  bool? success,
+  bool? retryable,
+  Object? error,
+}) {
+  _sendAttendanceDiag({
+    'event': event,
+    'employeeId': employeeId,
+    'storeId': store,
+    'requestId': requestId,
+    'recordId': recordId,
+    'expectedStatus': 'COMPLETED',
+    'success': success,
+    'code': code,
+    'retryable': retryable,
+    'message': message,
+    if (error != null) 'exceptionType': error.runtimeType.toString(),
+    if (error != null) 'exceptionMessage': error.toString(),
+  });
+}
+
 Future<void> saveBootstrapCache(Map<String, dynamic> data) async {
   final stores = data['stores'];
   final employees = data['employees'];
@@ -660,6 +747,7 @@ void main() {
     );
   }
 
+  installHistoryFirstPaint();
   runApp(const AttendanceApp());
 }
 
@@ -907,8 +995,6 @@ class _LoginPageState extends State<LoginPage>
       // 새로 추가된 직원의 검증값도 이후 로그인에 대비해 미리 올립니다.
       verifiedPasswordPreloadFuture =
           _preloadVerifiedPasswords(employeeList);
-
-      debugPrint('[목록캐시갱신] 매장/직원 최신 목록 반영 완료');
     } catch (e) {
       // 기존 캐시가 있으므로 갱신 실패는 로그인 화면을 막지 않습니다.
       debugPrint('[목록캐시갱신] 서버 갱신 생략: $e');
@@ -946,7 +1032,6 @@ class _LoginPageState extends State<LoginPage>
           data['stores'] is List &&
           data['employees'] is List) {
         await saveBootstrapCache(data);
-        debugPrint('[목록캐시갱신] 로그인 후 최신 목록 캐시 저장 완료');
       }
     } catch (e) {
       debugPrint('[목록캐시갱신] 로그인 후 캐시 저장 생략: $e');
@@ -1008,8 +1093,6 @@ class _LoginPageState extends State<LoginPage>
             onError: (Object _, StackTrace _) {},
           ),
         );
-
-        debugPrint('[앱시작상태] 자동로그인 직원 status 선조회 시작');
       }
     }
 
@@ -1199,7 +1282,6 @@ class _LoginPageState extends State<LoginPage>
     Future<Map<String, dynamic>> makeStatusFuture() {
       if (canReuseStartupStatus) {
         passwordGeneration = startupStatusPasswordGeneration ?? passwordGeneration;
-        debugPrint('[앱시작상태] 앱 시작 때 선조회한 status 요청 재사용');
         return startupStatusFuture!;
       }
 
@@ -1293,12 +1375,6 @@ class _LoginPageState extends State<LoginPage>
       return;
     }
 
-    debugPrint(
-      locallyVerified
-          ? '[즉시로그인V5] 로컬 검증 성공 - 즉시 WorkPage 이동'
-          : '[로그인검증] 서버 인증 성공 후 WorkPage 이동',
-    );
-
     if (!mounted) return;
 
     // 직접 로그인과 자동로그인 모두 저장된 상태를 먼저 표시합니다.
@@ -1321,12 +1397,6 @@ class _LoginPageState extends State<LoginPage>
       }
     } catch (_) {
       alreadyConfirmedAttendance = null;
-    }
-
-    if (alreadyConfirmedAttendance != null) {
-      debugPrint('[앱시작상태] 마지막 서버 확정 상태로 WorkPage 즉시 진입');
-    } else {
-      debugPrint('[앱시작상태] 저장된 확정 상태 없음 - VERIFYING으로 즉시 진입');
     }
 
     Map<String, dynamic> initialAttendance = const {
@@ -2176,7 +2246,6 @@ class _WorkPageState extends State<WorkPage>
 
     if (initialStatus != 'VERIFYING') {
       applyAttendance(initialAttendance);
-      debugPrint('[앱시작상태] WorkPage 첫 프레임에 서버 확인 상태 즉시 적용');
     }
 
     // 이전에 받아 둔 이번 달 근무기록은 로컬에서 먼저 복원합니다.
@@ -2862,6 +2931,42 @@ class _WorkPageState extends State<WorkPage>
     return result ?? false;
   }
 
+  // Diagnostics only: a compact, non-secret snapshot of the flags that decide whether 출근 can proceed
+  // (hasActionToken is a boolean — the token itself is never read into a log).
+  String _clockInStateJson() => jsonEncode({
+        'st': attendanceStatus,
+        'proc': isProcessing,
+        'auth': authActionPending,
+        'q': attendanceActionQueued,
+        'coq': clockOutQueuedAfterClockIn,
+        'ciq': clockInQueuedAfterClockOut,
+        'pw': isPasswordChanging,
+        'lv': isLoginVerified,
+        'tok': actionToken != null && actionToken!.isNotEmpty,
+      });
+
+  void _reportClockIn(
+    String event, {
+    String? code,
+    String? message,
+    String? requestId,
+    String? recordId,
+    bool? success,
+    bool? retryable,
+  }) {
+    _sendClockInDiag(
+      event,
+      employeeId: widget.employeeId,
+      store: widget.store,
+      code: code,
+      message: message ?? _clockInStateJson(),
+      requestId: requestId,
+      recordId: recordId,
+      success: success,
+      retryable: retryable,
+    );
+  }
+
   Future<void> requestClockIn() async {
     final canUseClockIn =
         attendanceStatus == 'NOT_IN' ||
@@ -2873,8 +2978,24 @@ class _WorkPageState extends State<WorkPage>
         !canUseClockIn ||
         isProcessing ||
         (attendanceActionQueued && clockOutQueuedAfterClockIn)) {
+      _reportClockIn(
+        'CLOCK_IN_SKIPPED',
+        code: authActionPending
+            ? 'AUTH_PENDING'
+            : isPasswordChanging
+                ? 'PASSWORD_CHANGING'
+                : clockInQueuedAfterClockOut
+                    ? 'CLOCKIN_QUEUED'
+                    : !canUseClockIn
+                        ? 'INVALID_STATUS'
+                        : isProcessing
+                            ? 'PROCESSING'
+                            : 'CLOCKOUT_QUEUED',
+      );
       return;
     }
+
+    _reportClockIn('CLOCK_IN_TAPPED');
 
     // 퇴근 저장 확인이 끝난 완료 화면에서만 새 출근 요청을 받습니다.
     if (attendanceStatus == 'COMPLETED') {
@@ -2882,6 +3003,9 @@ class _WorkPageState extends State<WorkPage>
         '출근하시겠습니까?',
       );
 
+      if (!confirmed && mounted) {
+        _reportClockIn('CLOCK_IN_CONFIRM_CANCELLED', code: 'CANCELLED_OR_DISMISSED');
+      }
       if (!confirmed || !mounted) {
         return;
       }
@@ -2912,6 +3036,7 @@ class _WorkPageState extends State<WorkPage>
       if (isProcessing ||
           (attendanceStatus != 'COMPLETED' &&
               attendanceStatus != 'NOT_IN')) {
+        _reportClockIn('CLOCK_IN_SKIPPED', code: 'CLOCKOUT_SAVE_PENDING');
         setState(() {
           clockInQueuedAfterClockOut = false;
           attendanceActionQueued = false;
@@ -2942,6 +3067,9 @@ class _WorkPageState extends State<WorkPage>
       '출근하시겠습니까?',
     );
 
+    if (!confirmed && mounted) {
+      _reportClockIn('CLOCK_IN_CONFIRM_CANCELLED', code: 'CANCELLED_OR_DISMISSED');
+    }
     if (!confirmed || !mounted) {
       // 확인창이 열려 있는 동안 다른 setState가 이미 버튼을 비활성으로 그렸을 수 있으므로
       // 취소 시 되돌린 값을 화면에도 즉시 반영합니다.
@@ -2981,6 +3109,7 @@ class _WorkPageState extends State<WorkPage>
       });
 
       if (!loginOk) {
+        _reportClockIn('CLOCK_IN_SKIPPED', code: 'LOGIN_NOT_VERIFIED');
         _restoreAfterUnconfirmedClockIn();
         return;
       }
@@ -2988,6 +3117,7 @@ class _WorkPageState extends State<WorkPage>
       // 로그인 확인 전에 출근을 눌렀는데 서버가 이미 WORKING이라고 확인했다면
       // 화면은 서버 상태를 그대로 유지하고 중복 clockIn API는 보내지 않습니다.
       if (verifiedLoginAttendanceStatus == 'WORKING') {
+        _reportClockIn('CLOCK_IN_SKIPPED', code: 'SERVER_ALREADY_WORKING');
         unawaited(clearPendingClockIn(widget.employeeId));
         setState(() {
           isProcessing = false;
@@ -2999,6 +3129,7 @@ class _WorkPageState extends State<WorkPage>
 
     if (statusBeforeClockIn != 'NOT_IN' &&
         statusBeforeClockIn != 'VERIFYING') {
+      _reportClockIn('CLOCK_IN_SKIPPED', code: 'STATUS_CHANGED');
       unawaited(clearPendingClockIn(widget.employeeId));
       _restoreAfterUnconfirmedClockIn();
       return;
@@ -3007,9 +3138,34 @@ class _WorkPageState extends State<WorkPage>
     unawaited(clockIn(showPending: false));
   }
 
+  void _reportClockOut(
+    String event, {
+    String? code,
+    String? message,
+    String? requestId,
+    String? recordId,
+    bool? success,
+    bool? retryable,
+  }) {
+    _sendClockOutDiag(
+      event,
+      employeeId: widget.employeeId,
+      store: widget.store,
+      code: code,
+      message: message ?? _clockInStateJson(),
+      requestId: requestId,
+      recordId: recordId,
+      success: success,
+      retryable: retryable,
+    );
+  }
+
   Future<void> requestClockOut() async {
     // 출근 저장/결과 확인 중에는 새 퇴근 요청을 받지 않습니다.
-    if (isProcessing) return;
+    if (isProcessing) {
+      _reportClockOut('CLOCK_OUT_SKIPPED', code: 'PROCESSING');
+      return;
+    }
 
     // 로그인 직후 서버 status가 아직 끝나지 않았어도 퇴근 확인창은 즉시 사용할 수 있습니다.
     // 실제 clockOut API는 아래 loginReady 게이트를 통과한 뒤, 서버가 최종적으로
@@ -3026,8 +3182,18 @@ class _WorkPageState extends State<WorkPage>
     if ((authActionPending && !waitingForClockInSave) ||
         isPasswordChanging ||
         !canUseClockOut) {
+      _reportClockOut(
+        'CLOCK_OUT_SKIPPED',
+        code: (authActionPending && !waitingForClockInSave)
+            ? 'AUTH_PENDING'
+            : isPasswordChanging
+                ? 'PASSWORD_CHANGING'
+                : 'INVALID_STATUS',
+      );
       return;
     }
+
+    _reportClockOut('CLOCK_OUT_TAPPED');
 
     // 출근 저장이 아직 진행 중이어도 퇴근 확인창은 즉시 띄웁니다.
     // 실제 clockOut API만 출근 저장 완료 뒤에 이어서 보내 충돌을 막습니다.
@@ -3037,6 +3203,9 @@ class _WorkPageState extends State<WorkPage>
         '퇴근하시겠습니까?',
       );
 
+      if (!confirmed && mounted) {
+        _reportClockOut('CLOCK_OUT_CONFIRM_CANCELLED', code: 'CANCELLED_OR_DISMISSED');
+      }
       if (!confirmed || !mounted) {
         return;
       }
@@ -3072,6 +3241,7 @@ class _WorkPageState extends State<WorkPage>
       if (!mounted) return;
 
       if (isProcessing || attendanceStatus != 'COMPLETED') {
+        _reportClockOut('CLOCK_OUT_SKIPPED', code: 'CLOCKIN_SAVE_PENDING');
         setState(() {
           clockOutQueuedAfterClockIn = false;
           attendanceActionQueued = false;
@@ -3097,6 +3267,9 @@ class _WorkPageState extends State<WorkPage>
       '퇴근하시겠습니까?',
     );
 
+    if (!confirmed && mounted) {
+      _reportClockOut('CLOCK_OUT_CONFIRM_CANCELLED', code: 'CANCELLED_OR_DISMISSED');
+    }
     if (!confirmed || !mounted) {
       attendanceActionQueued = false;
       return;
@@ -3126,11 +3299,13 @@ class _WorkPageState extends State<WorkPage>
       });
 
       if (!loginOk) {
+        _reportClockOut('CLOCK_OUT_SKIPPED', code: 'LOGIN_NOT_VERIFIED');
         _restoreAfterUnconfirmedClockOut(null);
         return;
       }
 
       if (attendanceStatus != 'WORKING') {
+        _reportClockOut('CLOCK_OUT_SKIPPED', code: 'STATUS_CHANGED');
         setState(() {
           isProcessing = false;
           attendanceActionQueued = false;
@@ -3146,6 +3321,7 @@ class _WorkPageState extends State<WorkPage>
     }
 
     if (attendanceStatus != 'WORKING') {
+      _reportClockOut('CLOCK_OUT_SKIPPED', code: 'STATUS_CHANGED');
       unawaited(clearPendingClockOut(widget.employeeId));
       attendanceActionQueued = false;
       _showAttendanceMessage(
@@ -3614,143 +3790,18 @@ class _WorkPageState extends State<WorkPage>
   }
 
 
-  void _printServerErrorIfAny(
-    String action,
-    Map<String, dynamic> data,
-  ) {
-    final detail = data['_serverError']?.toString().trim() ?? '';
-    if (detail.isNotEmpty) {
-      debugPrint('[서버오류][$action] $detail');
-    }
-  }
-
-  void _printAttendanceActionDiag(
-    String label,
-    Map<String, dynamic> data,
-    int clientMs,
-  ) {
-    final apiDiagRaw = data['_apiDiag'];
-    final actionDiagRaw = data['_actionDiag'];
-
-    final apiDiag = apiDiagRaw is Map
-        ? Map<String, dynamic>.from(apiDiagRaw)
-        : <String, dynamic>{};
-    final actionDiag = actionDiagRaw is Map
-        ? Map<String, dynamic>.from(actionDiagRaw)
-        : <String, dynamic>{};
-
-    debugPrint('');
-    debugPrint('========== $label 구간진단 ==========');
-    debugPrint('[앱왕복전체] ${clientMs}ms');
-    debugPrint(
-      '[API] 인증=${apiDiag['authMs'] ?? '-'}ms / '
-      '출퇴근함수=${apiDiag['actionMs'] ?? '-'}ms / '
-      'API내부전체=${apiDiag['totalMs'] ?? '-'}ms / '
-      '인증경로=${apiDiag['authSource'] ?? '-'}',
-    );
-
-    final clientSentAtMs = data['_clientSentAtMs'];
-    final commitEpochMs = actionDiag['commitEpochMs'];
-    final apiEntryEpochMs = apiDiag['apiEntryEpochMs'];
-    final apiReturnEpochMs = apiDiag['apiReturnEpochMs'];
-
-    if (clientSentAtMs is num &&
-        commitEpochMs is num &&
-        apiEntryEpochMs is num &&
-        apiReturnEpochMs is num) {
-      final buttonToCommitMs =
-          commitEpochMs.toInt() - clientSentAtMs.toInt();
-      final apiEntryToCommitMs =
-          commitEpochMs.toInt() - apiEntryEpochMs.toInt();
-      final commitToApiReturnMs =
-          apiReturnEpochMs.toInt() - commitEpochMs.toInt();
-
-      debugPrint(
-        '[실제시트확정] 버튼요청→flush완료≈${buttonToCommitMs}ms / '
-        'API진입→확정=${apiEntryToCommitMs}ms / '
-        '확정→API응답준비=${commitToApiReturnMs}ms',
-      );
-    } else {
-      // 출근 함수가 매장 검증/중복 처리 등에서 flush 전에 끝난 경우에도
-      // 진단 줄 자체가 사라지지 않도록 명확히 표시합니다.
-      debugPrint(
-        '[실제시트확정] flush 미도달 / '
-        'clientSent=${clientSentAtMs is num ? 'OK' : '없음'} / '
-        'commit=${commitEpochMs is num ? 'OK' : '없음'} / '
-        'apiEntry=${apiEntryEpochMs is num ? 'OK' : '없음'} / '
-        'apiReturn=${apiReturnEpochMs is num ? 'OK' : '없음'}',
-      );
-    }
-
-    if (label == '출근') {
-      debugPrint(
-        '[출근함수] 직원DB=${actionDiag['employeeMs'] ?? '-'}ms / '
-        '매장DB=${actionDiag['storeMs'] ?? '-'}ms / '
-        '잠금=${actionDiag['lockMs'] ?? '-'}ms / '
-        '열린기록검색=${actionDiag['findOpenMs'] ?? '-'}ms / '
-        '시트준비=${actionDiag['sheetMs'] ?? '-'}ms / '
-        '저장=${actionDiag['writeMs'] ?? '-'}ms / '
-        '함수전체=${actionDiag['totalMs'] ?? '-'}ms',
-      );
-
-      final sheetDetailRaw = actionDiag['sheetDetail'];
-      final sheetDetail = sheetDetailRaw is Map
-          ? Map<String, dynamic>.from(sheetDetailRaw)
-          : <String, dynamic>{};
-
-      if (sheetDetail.isNotEmpty) {
-        debugPrint(
-          '[시트준비상세1] 월경로=${sheetDetail['monthPath'] ?? '-'} / '
-          '캐시=${sheetDetail['monthCacheReadMs'] ?? '-'}ms / '
-          '속성=${sheetDetail['monthPropertyReadMs'] ?? '-'}ms / '
-          '시트ID=${sheetDetail['monthGetByIdMs'] ?? '-'}ms / '
-          '폴백탐색=${sheetDetail['monthFallbackLookupMs'] ?? '-'}ms / '
-          '생성준비=${sheetDetail['monthCreateSetupMs'] ?? '-'}ms / '
-          '힌트쓰기=${sheetDetail['monthHintWriteMs'] ?? '-'}ms / '
-          '월시트전체=${sheetDetail['monthSheetTotalMs'] ?? '-'}ms',
-        );
-        debugPrint(
-          '[시트준비상세2] 행경로=${sheetDetail['nextRowPath'] ?? '-'} / '
-          '캐시=${sheetDetail['nextRowCacheReadMs'] ?? '-'}ms / '
-          '속성=${sheetDetail['nextRowPropertyReadMs'] ?? '-'}ms / '
-          'getLastRow=${sheetDetail['nextRowGetLastRowMs'] ?? '-'}ms / '
-          'probe=${sheetDetail['nextRowProbeMs'] ?? '-'}ms / '
-          '힌트삭제=${sheetDetail['nextRowClearHintMs'] ?? '-'}ms / '
-          '폴백getLastRow=${sheetDetail['nextRowFallbackGetLastRowMs'] ?? '-'}ms / '
-          'A열전체=${sheetDetail['nextRowFullScanMs'] ?? '-'}ms / '
-          '힌트쓰기=${sheetDetail['nextRowHintWriteMs'] ?? '-'}ms / '
-          '다음행전체=${sheetDetail['nextRowTotalMs'] ?? '-'}ms',
-        );
-      }
-
-      debugPrint(
-        '[확정후상세] 행힌트=${actionDiag['postCommitLastRowHintMs'] ?? '-'}ms / '
-        '열린행힌트=${actionDiag['postCommitOpenHintMs'] ?? '-'}ms / '
-        '상태캐시=${actionDiag['postCommitStatusCacheMs'] ?? '-'}ms / '
-        '응답조립=${actionDiag['postCommitResultBuildMs'] ?? '-'}ms / '
-        '확정후전체=${actionDiag['postCommitTotalMs'] ?? '-'}ms',
-      );
-    } else {
-      debugPrint(
-        '[퇴근함수] 직원DB=${actionDiag['employeeMs'] ?? '-'}ms / '
-        '잠금=${actionDiag['lockMs'] ?? '-'}ms / '
-        '열린기록검색=${actionDiag['findOpenMs'] ?? '-'}ms / '
-        '행읽기=${actionDiag['rowReadMs'] ?? '-'}ms / '
-        '저장=${actionDiag['writeMs'] ?? '-'}ms / '
-        '함수전체=${actionDiag['totalMs'] ?? '-'}ms',
-      );
-    }
-
-    final apiTotal = apiDiag['totalMs'];
-    if (apiTotal is num) {
-      final outsideMs = clientMs - apiTotal.toInt();
-      debugPrint('[Apps Script/네트워크 바깥구간] 약 ${outsideMs}ms');
-    }
-    debugPrint('=======================================');
-  }
+  // 현재 서버(D1/Workers)는 _serverError/_apiDiag/_actionDiag 필드를 전혀 보내지 않으므로
+  // 과거 Apps Script 시절의 시트/행 단위 타이밍 로그는 여기서 더 이상 출력하지 않습니다.
+  // 장애 진단은 ATTENDANCE_REQUEST/RESPONSE/EXCEPTION 로그와 _sendAttendanceDiag로 충분합니다.
 
   Future<void> clockIn({bool showPending = true}) async {
-    if ((isProcessing && showPending) || isPasswordChanging) return;
+    if ((isProcessing && showPending) || isPasswordChanging) {
+      _reportClockIn(
+        'CLOCK_IN_SKIPPED',
+        code: isPasswordChanging ? 'PASSWORD_CHANGING' : 'PROCESSING',
+      );
+      return;
+    }
 
     if (showPending) {
       _showClockInPending();
@@ -3767,7 +3818,6 @@ class _WorkPageState extends State<WorkPage>
         'hasActionToken=${actionToken != null && actionToken!.isNotEmpty}',
       );
 
-      final actionWatch = Stopwatch()..start();
       final data = await callApi({
         'action': 'clockIn',
         'employeeId': widget.employeeId,
@@ -3794,14 +3844,6 @@ class _WorkPageState extends State<WorkPage>
           'message': data['message'],
         });
       }
-      actionWatch.stop();
-      _printServerErrorIfAny('clockIn', data);
-      _printAttendanceActionDiag(
-        '출근',
-        data,
-        actionWatch.elapsedMilliseconds,
-      );
-
       if (!mounted) return;
 
       if (data['success'] != true) {
@@ -3811,6 +3853,26 @@ class _WorkPageState extends State<WorkPage>
             null,
           );
           return;
+        }
+
+        // A failure answered locally (no HTTP request was made) is told apart from a server rejection.
+        if (data['localOnly'] == true) {
+          _reportClockIn(
+            'CLOCK_IN_LOCAL_FAIL',
+            code: data['code']?.toString(),
+            requestId: diagIntent?['requestId']?.toString(),
+            success: false,
+          );
+        } else {
+          _reportClockIn(
+            'CLOCK_IN_NONRETRYABLE_FAIL',
+            code: data['code']?.toString(),
+            message: data['message']?.toString(),
+            requestId: (data['requestId'] ?? diagIntent?['requestId'])?.toString(),
+            recordId: (data['recordId'] ?? diagIntent?['recordId'])?.toString(),
+            success: false,
+            retryable: false,
+          );
         }
 
         unawaited(clearPendingClockIn(widget.employeeId));
@@ -3890,7 +3952,13 @@ class _WorkPageState extends State<WorkPage>
     bool showPending = true,
     String? recoveryNote,
   }) async {
-    if ((isProcessing && showPending) || isPasswordChanging) return;
+    if ((isProcessing && showPending) || isPasswordChanging) {
+      _reportClockOut(
+        'CLOCK_OUT_SKIPPED',
+        code: isPasswordChanging ? 'PASSWORD_CHANGING' : 'PROCESSING',
+      );
+      return;
+    }
 
     final noteBackup = recoveryNote ?? noteController.text.trim();
 
@@ -3911,7 +3979,6 @@ class _WorkPageState extends State<WorkPage>
         'hasActionToken=${actionToken != null && actionToken!.isNotEmpty}',
       );
 
-      final actionWatch = Stopwatch()..start();
       final data = await callApi({
         'action': 'clockOut',
         'employeeId': widget.employeeId,
@@ -3939,14 +4006,6 @@ class _WorkPageState extends State<WorkPage>
           'message': data['message'],
         });
       }
-      actionWatch.stop();
-      _printServerErrorIfAny('clockOut', data);
-      _printAttendanceActionDiag(
-        '퇴근',
-        data,
-        actionWatch.elapsedMilliseconds,
-      );
-
       if (!mounted) return;
 
       if (data['success'] != true) {
@@ -3956,6 +4015,27 @@ class _WorkPageState extends State<WorkPage>
             noteBackup,
           );
           return;
+        }
+
+        // A failure answered locally (no HTTP request was made) is told apart from a server rejection.
+        if (data['localOnly'] == true) {
+          _reportClockOut(
+            'CLOCK_OUT_LOCAL_FAIL',
+            code: data['code']?.toString(),
+            requestId: diagIntent?['requestId']?.toString(),
+            recordId: diagIntent?['recordId']?.toString(),
+            success: false,
+          );
+        } else {
+          _reportClockOut(
+            'CLOCK_OUT_NONRETRYABLE_FAIL',
+            code: data['code']?.toString(),
+            message: data['message']?.toString(),
+            requestId: (data['requestId'] ?? diagIntent?['requestId'])?.toString(),
+            recordId: (data['recordId'] ?? diagIntent?['recordId'])?.toString(),
+            success: false,
+            retryable: false,
+          );
         }
 
         unawaited(clearPendingClockOut(widget.employeeId));
@@ -4059,8 +4139,6 @@ class _WorkPageState extends State<WorkPage>
         hasCalendarLoaded = true;
         calendarError = null;
       });
-
-      debugPrint('[근무기록캐시] 선택한 월 근무기록 로컬 즉시 복원');
     } catch (_) {
       // 캐시가 없거나 깨져 있어도 서버 조회에는 영향을 주지 않습니다.
     }
@@ -4101,7 +4179,7 @@ class _WorkPageState extends State<WorkPage>
       1,
     );
     final now = _serverNow();
-    if (nextMonth.isBefore(DateTime(2026, 8, 1)) ||
+    if (nextMonth.isBefore(earliestWorkMonth) ||
         nextMonth.isAfter(DateTime(now.year, now.month, 1))) {
       return;
     }
@@ -4277,28 +4355,8 @@ class _WorkPageState extends State<WorkPage>
     }
   }
 
-  int _durationTextToMinutes(String text) {
-    final hourMatch =
-        RegExp(r'(-?\d+)\s*시간').firstMatch(text);
-    final minuteMatch =
-        RegExp(r'(-?\d+)\s*분').firstMatch(text);
-
-    final hours = int.tryParse(
-          hourMatch?.group(1) ?? '0',
-        ) ??
-        0;
-
-    final minutes = int.tryParse(
-          minuteMatch?.group(1) ?? '0',
-        ) ??
-        0;
-
-    final total = hours * 60 + minutes;
-    return total < 0 ? 0 : total;
-  }
-
   String _formatDurationDisplay(String text) {
-    final minutes = _durationTextToMinutes(text);
+    final minutes = workedTextToMinutes(text);
 
     if (minutes <= 0) {
       return '';
@@ -4322,7 +4380,7 @@ class _WorkPageState extends State<WorkPage>
     var totalMinutes = 0;
 
     for (final record in calendarRecords) {
-      totalMinutes += _durationTextToMinutes(
+      totalMinutes += workedTextToMinutes(
         record['workedText']?.toString() ?? '',
       );
     }
@@ -4370,7 +4428,7 @@ class _WorkPageState extends State<WorkPage>
   }
 
   bool _isPositiveBreakTime(String text) {
-    return _durationTextToMinutes(text) > 0;
+    return workedTextToMinutes(text) > 0;
   }
 
   Future<void> _showDayDetail(
@@ -4510,16 +4568,17 @@ class _WorkPageState extends State<WorkPage>
   Future<void> _openCalculator() async {
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => CalculatorPage(
-        loadCurrentMonthCalendar: () {
-          final now = DateTime.now();
-          return callApi({
-            'action': 'calendar',
-            'employeeId': widget.employeeId,
-            'password': currentPassword,
-            'year': now.year,
-            'month': now.month,
-          });
-        },
+        // Starts on whatever month 근무기록 is currently showing (already defaults to
+        // the current KST month in initState), instead of recomputing "today" here.
+        initialMonth: calendarMonth,
+        now: _serverNow(),
+        loadMonthCalendar: (year, month) => callApi({
+          'action': 'calendar',
+          'employeeId': widget.employeeId,
+          'password': currentPassword,
+          'year': year,
+          'month': month,
+        }),
         readSavedWage: () => secureStorage.read(
           key: hourlyWageKey(widget.employeeId),
         ),
@@ -4717,7 +4776,7 @@ class _WorkPageState extends State<WorkPage>
                     IconButton(
                       tooltip: '이전 달',
                       onPressed: _canChangeCalendarMonth &&
-                              calendarMonth.isAfter(DateTime(2026, 8, 1))
+                              calendarMonth.isAfter(earliestWorkMonth)
                           ? () => _changeCalendarMonth(-1)
                           : null,
                       icon: const Icon(Icons.chevron_left),
