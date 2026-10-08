@@ -2178,6 +2178,11 @@ class _WorkPageState extends State<WorkPage>
   // 서버 상태를 아직 모를 때는 미출근으로 단정하지 않습니다.
   // 이미 서버에서 확인된 상태가 있으면 initState에서 첫 프레임부터 바로 적용합니다.
   String attendanceStatus = 'VERIFYING';
+  // The store of the open shift, exactly as the server reports it for that record. It can differ from the store
+  // chosen at login (an admin may have added the shift at another store); it is only used for the header text,
+  // never for requests, local recovery data or any decision.
+  String? workingStoreName;
+  String get shownStore => attendanceStatus == 'WORKING' ? (workingStoreName ?? widget.store) : widget.store;
   String statusText = '출근 상태 확인 중';
   String clockInText = '-';
   String clockOutText = '-';
@@ -2735,6 +2740,8 @@ class _WorkPageState extends State<WorkPage>
 
     attendanceStatus = status;
     isWorking = status == 'WORKING';
+    final recordStore = attendance['store']?.toString().trim() ?? '';
+    workingStoreName = status == 'WORKING' && recordStore.isNotEmpty ? recordStore : null;
 
     if (status == 'WORKING') {
       _clearCompletedViewTimer();
@@ -5079,7 +5086,7 @@ class _WorkPageState extends State<WorkPage>
                   child: Column(
                     children: [
                       Text(
-                        widget.store,
+                        shownStore,
                         style: const TextStyle(
                           fontSize: 24,
                           fontWeight:
