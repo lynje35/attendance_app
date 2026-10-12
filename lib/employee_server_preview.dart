@@ -88,6 +88,7 @@ class EmployeeServerPreview {
       'bootstrap' => ['action'],
       'status' => ['action', 'employeeId', 'password', 'selectedStore', 'actionToken'],
       'calendar' => ['action', 'employeeId', 'password', 'year', 'month', 'actionToken'],
+      'calculatorNotice' => ['action', 'employeeId', 'password', 'actionToken'],
       'changePassword' => ['action', 'employeeId', 'currentPassword', 'newPassword', 'confirmPassword'],
       'clockIn' || 'clockOut' => ['action', 'employeeId', 'password', 'selectedStore', 'actionToken'],
       _ => throw UnsupportedError('테스트에 연결되지 않은 요청입니다.'),

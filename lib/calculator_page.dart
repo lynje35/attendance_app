@@ -1,14 +1,14 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'attendance_shared.dart';
+import 'calculator_notice.dart';
 import 'phone_launcher.dart';
 
 export 'attendance_shared.dart' show earliestWorkMonth, workedTextToMinutes;
-
-const String _inquiryPhone = '01097465633';
 
 String formatWon(int value) {
   final text = value.toString();
@@ -28,6 +28,7 @@ class CalculatorPage extends StatefulWidget {
     required this.now,
     required this.readSavedWage,
     required this.saveWage,
+    this.notice,
   });
 
   // Same API the 근무기록 calendar already uses (action: 'calendar'): no new endpoint.
@@ -41,6 +42,9 @@ class CalculatorPage extends StatefulWidget {
   final DateTime now;
   final Future<String?> Function() readSavedWage;
   final Future<void> Function(String) saveWage;
+  // The notes shown under 예상 실 지급액, already resolved for this build (see calculator_notice.dart). Only that area follows it.
+  // Without one the page shows the kb_main wording it always had; lib/main.dart always passes the value for its own build.
+  final ValueListenable<CalculatorNotice>? notice;
 
   @override
   State<CalculatorPage> createState() => _CalculatorPageState();
@@ -143,8 +147,8 @@ class _CalculatorPageState extends State<CalculatorPage> {
     unawaited(widget.saveWage(text.trim()));
   }
 
-  Future<void> _call() async {
-    final launched = await openTelLink(_inquiryPhone);
+  Future<void> _call(String phone) async {
+    final launched = await openTelLink(phone);
     if (!launched && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('전화 앱을 열지 못했어요.')),
@@ -156,6 +160,43 @@ class _CalculatorPageState extends State<CalculatorPage> {
   void dispose() {
     _wageController.dispose();
     super.dispose();
+  }
+
+  // The part of the card that the administrator can change. An empty text hides its line; an empty phone hides the
+  // 문의 line together with the call button. Nothing here takes part in the calculation.
+  Widget _noticeArea(CalculatorNotice notice) {
+    final info = notice.infoText.trim(), warning = notice.warningText.trim(), phone = notice.contactPhone.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final line in info.isEmpty ? const <String>[] : info.split('\n')) Text(line.isEmpty ? ' ' : line),
+        if (warning.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Text(
+            warning,
+            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+          ),
+        ],
+        if (phone.isNotEmpty) ...[
+          SizedBox(height: warning.isNotEmpty ? 8 : 12),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '문의: $phone',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                onPressed: () => _call(phone),
+                icon: const Icon(Icons.call),
+                tooltip: '전화 걸기',
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 
   @override
@@ -263,29 +304,13 @@ class _CalculatorPageState extends State<CalculatorPage> {
                               : Text('${formatWon(displayNet)}원', style: Theme.of(context).textTheme.headlineMedium),
                           const Divider(height: 32),
                           const Text('자동으로 3.3% 계산이 돼요.'),
-                          const Text('월급은 매월 10일에 지급돼요'),
-                          const Text('(주말이나 공휴일 껴있는 경우 10일 전후 2일 정도 차이 날 수 있어요.)'),
-                          const SizedBox(height: 12),
-                          const Text(
-                            '본인 외 다른 직원에게 보여주지 마세요',
-                            style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              const Expanded(
-                                child: Text(
-                                  '문의: $_inquiryPhone',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: _call,
-                                icon: const Icon(Icons.call),
-                                tooltip: '전화 걸기',
-                              ),
-                            ],
-                          ),
+                          if (widget.notice == null)
+                            _noticeArea(CalculatorNotice.kbBuiltIn)
+                          else
+                            ValueListenableBuilder<CalculatorNotice>(
+                              valueListenable: widget.notice!,
+                              builder: (context, notice, _) => _noticeArea(notice),
+                            ),
                         ],
                       ),
                     ),

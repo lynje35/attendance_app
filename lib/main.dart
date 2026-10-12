@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'employee_server_preview.dart';
+import 'calculator_notice.dart';
 import 'calculator_page.dart';
 import 'history_first_paint.dart';
 
@@ -2203,6 +2204,16 @@ class _WorkPageState extends State<WorkPage>
   // 토큰이 없거나 만료되면 서버가 기존 비밀번호 인증으로 자동 복귀합니다.
   String? actionToken;
 
+  // 계산기 안내(예상 실 지급액 아래 문구). 값은 이 빌드의 조직에 맞게 이미 정리된 "화면에 보일 값"이며,
+  // 계산기 화면은 이 notifier만 구독합니다. 시작 값은 이 빌드의 기본 문구(kb_main이면 기존 문구, 그 외는 숨김).
+  final ValueNotifier<CalculatorNotice> calculatorNotice =
+      ValueNotifier<CalculatorNotice>(
+    CalculatorNotice.builtInFor(employeeServerPreview?.endpoint),
+  );
+  // 마지막으로 저장/수신한 서버 값(캐시와 같은 내용). 같은 값이면 다시 저장하지 않습니다.
+  CalculatorNotice? calculatorNoticeStored;
+  bool calculatorNoticeInFlight = false;
+
   final TextEditingController noteController =
       TextEditingController();
 
@@ -2257,6 +2268,9 @@ class _WorkPageState extends State<WorkPage>
     // 서버 최신 조회는 사용자가 근무기록을 열었을 때 뒤에서 갱신합니다.
     unawaited(_restoreCalendarCache());
 
+    // 계산기 안내도 로컬 캐시를 먼저 복원해 둡니다(계산기를 열 때 바로 쓰기 위해). 서버 조회는 계산기를 열 때 뒤에서 합니다.
+    unawaited(_restoreCalculatorNotice());
+
     // 로그인 화면에서 이미 시작해 둔 서버 요청의 결과만 기다립니다.
     // 화면은 먼저 열린 상태이고, 확인중/로딩 문구 없이
     // 서버 결과만 뒤에서 조용히 반영합니다.
@@ -2293,6 +2307,7 @@ class _WorkPageState extends State<WorkPage>
     resumeStatusTimer?.cancel();
 
     noteController.dispose();
+    calculatorNotice.dispose();
 
     super.dispose();
   }
@@ -4572,9 +4587,74 @@ class _WorkPageState extends State<WorkPage>
     );
   }
 
+  // 계산기 안내 캐시를 읽어 화면에 보일 값으로 반영합니다. 캐시가 없거나 깨졌거나 다른 API 주소용이면 아무것도 하지 않고,
+  // 어떤 실패도 앱 기능에 영향을 주지 않습니다. 서버 값이 이미 도착했다면 오래된 캐시로 덮어쓰지 않습니다.
+  Future<void> _restoreCalculatorNotice() async {
+    final endpoint = employeeServerPreview?.endpoint;
+    if (endpoint == null) return;
+    try {
+      final raw = await secureStorage.read(key: calculatorNoticeCacheKey(endpoint));
+      final cached = decodeCalculatorNoticeCache(endpoint, raw);
+      if (!mounted || cached == null || calculatorNoticeStored != null) return;
+      calculatorNoticeStored = cached;
+      calculatorNotice.value = cached.effective(endpoint);
+    } catch (_) {
+      // 캐시를 읽지 못해도 기본 문구로 계속 동작합니다.
+    }
+  }
+
+  Future<void> _saveCalculatorNoticeCache(Uri endpoint, CalculatorNotice notice) async {
+    try {
+      await secureStorage.write(
+        key: calculatorNoticeCacheKey(endpoint),
+        value: encodeCalculatorNoticeCache(endpoint, notice),
+      );
+    } catch (_) {
+      // 로컬 저장 실패는 계산기 사용에 영향을 주지 않습니다.
+    }
+  }
+
+  // 계산기를 연 뒤 뒤에서 최신 안내를 받아 옵니다. 화면을 막지 않고, 로그인 검증이 끝난 뒤에만 요청을 보내며,
+  // 실패(오류 응답, 제한시간, 미지원 서버 포함)는 조용히 무시하고 지금 보이는 값을 그대로 둡니다.
+  Future<void> _refreshCalculatorNotice() async {
+    final endpoint = employeeServerPreview?.endpoint;
+    if (calculatorNoticeInFlight) return;
+    calculatorNoticeInFlight = true;
+    try {
+      if (!await _waitForLoginReady()) return;
+      if (!mounted || isPasswordChanging || authActionPending) return;
+
+      final data = await callApi({
+        'action': 'calculatorNotice',
+        'employeeId': widget.employeeId,
+        'password': currentPassword,
+        'actionToken': ?actionToken,
+      });
+      if (!mounted) return;
+
+      final received = CalculatorNotice.fromResponse(data);
+      if (received == null) return;
+      _captureActionToken(data);
+
+      final shown = received.effective(endpoint);
+      if (calculatorNotice.value != shown) calculatorNotice.value = shown;
+      if (endpoint != null && calculatorNoticeStored != received) {
+        calculatorNoticeStored = received;
+        unawaited(_saveCalculatorNoticeCache(endpoint, received));
+      }
+    } catch (e) {
+      debugPrint('[계산기안내] $e');
+    } finally {
+      calculatorNoticeInFlight = false;
+    }
+  }
+
   Future<void> _openCalculator() async {
+    // 화면은 기다리지 않고 바로 엽니다. 안내는 지금 가진 값(캐시 또는 기본 문구)으로 먼저 그리고, 최신 값은 뒤에서 받아 갱신합니다.
+    unawaited(_refreshCalculatorNotice());
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => CalculatorPage(
+        notice: calculatorNotice,
         // Starts on whatever month 근무기록 is currently showing (already defaults to
         // the current KST month in initState), instead of recomputing "today" here.
         initialMonth: calendarMonth,
