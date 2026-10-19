@@ -16,7 +16,8 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 // ignore: depend_on_referenced_packages
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
-// The calculator notes (일반 안내문 / 빨간 경고 / 문의 전화) now come from the server, with a cache and a per-build fallback.
+// The calculator settings (일반 안내문 / 빨간 경고 / 문의 전화 and the deduction) come from the server, with a cache and a per-build
+// fallback: kb_main keeps its wording and 3.3%, every other build shows no notes and deducts nothing.
 // Everything below goes through the real WorkPage -> CalculatorPage path against a fake employee API.
 const kbApi = 'https://attendance-employee-api.lynje.workers.dev/employee/api';
 const shop2Api = 'https://kb-checkin-shop2-employee.lynje.workers.dev/employee/api';
@@ -34,8 +35,11 @@ class FakeApi {
 
 http.Response json(Object body, [int status = 200]) =>
     http.Response.bytes(utf8.encode(jsonEncode(body)), status, headers: {'content-type': 'application/json; charset=utf-8'});
-http.Response configured(String info, String warning, String phone, [int updatedAt = 1700000000000]) =>
-    json({'success': true, 'configured': true, 'infoText': info, 'warningText': warning, 'contactPhone': phone, 'updatedAt': updatedAt, 'actionToken': ''});
+// The deduction defaults to freelance_3_3 (the 3.3% every earlier assertion in this file was written under); pass {} for settings
+// saved before the option existed, or another deduction to test it.
+const freelance = {'deductionMode': 'freelance_3_3', 'deductionRateBp': 330};
+http.Response configured(String info, String warning, String phone, [int updatedAt = 1700000000000, Map<String, Object?> deduction = freelance]) =>
+    json({'success': true, 'configured': true, 'infoText': info, 'warningText': warning, 'contactPhone': phone, 'updatedAt': updatedAt, ...deduction, 'actionToken': ''});
 final notConfigured = json({'success': true, 'configured': false, 'actionToken': ''});
 
 FakeApi install(String api) {
@@ -113,6 +117,15 @@ void expectOnlyFixedLine() {
   expect(find.byIcon(Icons.call), findsNothing);
 }
 
+// A build that is not kb_main, with nothing stored: no kb_main notes, no phone, and no deduction sentence at all.
+void expectNothingShown() {
+  expect(find.textContaining('자동으로'), findsNothing);
+  for (final gone in [kbInfo1, kbInfo2, kbWarning, kbPhoneLine]) { expect(find.text(gone), findsNothing, reason: gone); }
+  expect(find.textContaining('문의'), findsNothing);
+  expect(find.textContaining('01097465633'), findsNothing);
+  expect(find.byIcon(Icons.call), findsNothing);
+}
+
 String cacheKey(String api) => calculatorNoticeCacheKey(Uri.parse(api));
 
 class FakeLauncher extends UrlLauncherPlatform with MockPlatformInterfaceMixin {
@@ -139,7 +152,7 @@ void main() {
     });
 
     test('a stored setting wins; "not configured" means the built-in for that build', () {
-      const own = CalculatorNotice(configured: true, infoText: '샵2 안내', warningText: '', contactPhone: '0212345678', updatedAt: 7);
+      const own = CalculatorNotice(configured: true, infoText: '샵2 안내', warningText: '', contactPhone: '0212345678', updatedAt: 7, deductionMode: deductionCustom, deductionRateBp: 500);
       expect(own.effective(Uri.parse(shop2Api)), own);
       expect(own.effective(Uri.parse(kbApi)), own);
       const none = CalculatorNotice(configured: false);
@@ -177,10 +190,10 @@ void main() {
         await openCalculator(tester);
         expect(find.byType(CalculatorPage), findsOneWidget);
         expect(fake.notices, hasLength(1)); // asked for, not waited for
-        if (kb) { expectKbWording(); } else { expectOnlyFixedLine(); } // no kb wording flashes up on shop2 while waiting
+        if (kb) { expectKbWording(); } else { expectNothingShown(); } // no kb wording flashes up on shop2 while waiting
         held.complete(notConfigured);
         await settle(tester);
-        if (kb) { expectKbWording(); } else { expectOnlyFixedLine(); }
+        if (kb) { expectKbWording(); } else { expectNothingShown(); }
         await tester.pumpWidget(const SizedBox());
       }
     });
@@ -194,12 +207,12 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('shop2, nothing stored, server says not configured: no kb_main wording and no phone number, only the fixed 3.3% line', (tester) async {
+    testWidgets('shop2, nothing stored, server says not configured: no kb_main wording, no phone number and no 3.3% line', (tester) async {
       install(shop2Api).notice = (_) async => notConfigured;
       await openWork(tester);
       await openCalculator(tester);
       await settle(tester);
-      expectOnlyFixedLine();
+      expectNothingShown();
       await tester.pumpWidget(const SizedBox());
     });
 
@@ -267,7 +280,7 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('the 3.3% calculation is the same whatever the notes say', (tester) async {
+    testWidgets('the 3.3% calculation is the same whatever the notes say (kb_main, nothing chosen or freelance_3_3)', (tester) async {
       for (final response in [notConfigured, configured('', '', ''), configured('다른 안내', '다른 경고', '0212345678')]) {
         install(kbApi).notice = (_) async => response;
         await openWork(tester);
@@ -327,7 +340,7 @@ void main() {
         await openCalculator(tester);
         await settle(tester);
         expect(find.text('예전 안내'), findsNothing);
-        if (kb) { expectKbWording(); } else { expectOnlyFixedLine(); }
+        if (kb) { expectKbWording(); } else { expectNothingShown(); }
         expect(jsonDecode((await secureStorage.read(key: cacheKey(api)))!)['configured'], false);
         await tester.pumpWidget(const SizedBox());
       }
@@ -346,7 +359,7 @@ void main() {
         fake.notice = (_) => Completer<http.Response>().future;
         await openWork(tester, storage: storage);
         await openCalculator(tester);
-        expectOnlyFixedLine();
+        expectNothingShown();
         expect(find.textContaining('kb 캐시'), findsNothing);
         await tester.pump(apiCallTimeout + const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
@@ -366,7 +379,7 @@ void main() {
 
   group('when the server does not help', () {
     // Each failure leaves exactly what was on screen, shows nothing to the user and does not touch the stored copy.
-    const stored = CalculatorNotice(configured: true, infoText: '지금 안내', warningText: '지금 경고', contactPhone: '0212345678', updatedAt: 5);
+    const stored = CalculatorNotice(configured: true, infoText: '지금 안내', warningText: '지금 경고', contactPhone: '0212345678', updatedAt: 5, deductionMode: deductionFreelance, deductionRateBp: freelanceRateBp);
     final failures = <String, Future<http.Response> Function(Map<String, dynamic>)>{
       'an error answer (wrong PIN / session)': (_) async => json({'success': false, 'code': 'INVALID_CREDENTIALS', 'message': '비밀번호가 일치하지 않습니다.'}),
       'ACTION_NOT_AVAILABLE from an older server': (_) async => json({'success': false, 'code': 'ACTION_NOT_AVAILABLE', 'message': '아직 테스트에 연결되지 않은 기능입니다.'}, 400),
@@ -412,8 +425,210 @@ void main() {
       await openWork(tester, login: Completer<Map<String, dynamic>>().future);
       await openCalculator(tester);
       expect(find.byType(CalculatorPage), findsOneWidget);
-      expectOnlyFixedLine();
+      expectNothingShown();
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
+  group('deduction', () {
+    test('the built-ins: kb_main deducts 3.3%, every other build deducts nothing', () {
+      expect([CalculatorNotice.kbBuiltIn.deductionMode, CalculatorNotice.kbBuiltIn.deductionRateBp], [deductionFreelance, 330]);
+      expect([CalculatorNotice.hidden.deductionMode, CalculatorNotice.hidden.deductionRateBp], [deductionNone, 0]);
+      expect(CalculatorNotice.builtInFor(Uri.parse(kbApi)).deductionRateBp, 330);
+      for (final other in [shop2Api, 'https://example.com/employee/api', 'https://attendance-employee-api.lynje.workers.dev.evil.example/employee/api']) {
+        expect(CalculatorNotice.builtInFor(Uri.parse(other)).deductionRateBp, 0, reason: other);
+      }
+      expect(CalculatorNotice.builtInFor(null).deductionRateBp, 0);
+    });
+
+    test('notes saved without a chosen deduction keep their notes and take only the deduction of the build; a chosen one always wins', () {
+      const unset = CalculatorNotice(configured: true, infoText: '안내', warningText: '', contactPhone: '0212345678', updatedAt: 3);
+      final onKb = unset.effective(Uri.parse(kbApi)), onShop2 = unset.effective(Uri.parse(shop2Api));
+      expect([onKb.infoText, onKb.contactPhone, onKb.updatedAt, onKb.configured, onKb.deductionMode, onKb.deductionRateBp], ['안내', '0212345678', 3, true, deductionFreelance, 330]);
+      expect([onShop2.infoText, onShop2.contactPhone, onShop2.configured, onShop2.deductionMode, onShop2.deductionRateBp], ['안내', '0212345678', true, deductionNone, 0]);
+      const chosen = CalculatorNotice(configured: true, infoText: '안내', updatedAt: 3, deductionMode: deductionNone, deductionRateBp: 0);
+      expect(chosen.effective(Uri.parse(kbApi)), chosen); // kb_main's administrator picked 공제 없음: that is what applies
+      expect(chosen.effective(Uri.parse(shop2Api)), chosen);
+    });
+
+    test('answers: the three modes parse; absent or null means not chosen; anything inconsistent is not an answer at all', () {
+      Map<String, dynamic> answer(Map<String, Object?> extra) => {'success': true, 'configured': true, 'infoText': 'a', 'warningText': 'b', 'contactPhone': '', 'updatedAt': 5, ...extra};
+      for (final (mode, bp) in [(deductionNone, 0), (deductionFreelance, 330), (deductionCustom, 0), (deductionCustom, 1), (deductionCustom, 270), (deductionCustom, 500), (deductionCustom, 10000)]) {
+        final parsed = CalculatorNotice.fromResponse(answer({'deductionMode': mode, 'deductionRateBp': bp}))!;
+        expect([parsed.deductionMode, parsed.deductionRateBp, parsed.configured, parsed.infoText], [mode, bp, true, 'a']);
+      }
+      for (final unset in <Map<String, Object?>>[{}, {'deductionMode': null, 'deductionRateBp': null}]) {
+        final parsed = CalculatorNotice.fromResponse(answer(unset))!;
+        expect([parsed.deductionMode, parsed.deductionRateBp, parsed.infoText], [null, null, 'a']);
+      }
+      for (final bad in <Map<String, Object?>>[
+        {'deductionMode': deductionCustom, 'deductionRateBp': -1}, {'deductionMode': deductionCustom, 'deductionRateBp': 10001}, {'deductionMode': deductionCustom, 'deductionRateBp': 270.5},
+        {'deductionMode': deductionCustom, 'deductionRateBp': 500.0}, {'deductionMode': deductionCustom, 'deductionRateBp': '500'}, {'deductionMode': deductionCustom, 'deductionRateBp': null},
+        {'deductionMode': deductionNone, 'deductionRateBp': 100}, {'deductionMode': deductionNone, 'deductionRateBp': null}, {'deductionMode': deductionFreelance, 'deductionRateBp': 300},
+        {'deductionMode': 'something_new', 'deductionRateBp': 5}, {'deductionMode': 3, 'deductionRateBp': 330}, {'deductionMode': null, 'deductionRateBp': 330}, {'deductionRateBp': 330},
+        {'deductionMode': deductionFreelance},
+      ]) { expect(CalculatorNotice.fromResponse(answer(bad)), isNull, reason: '$bad'); }
+    });
+
+    test('the percentage shown has no trailing zeros and no float noise', () {
+      for (final (bp, text) in [(330, '3.3'), (500, '5'), (270, '2.7'), (275, '2.75'), (205, '2.05'), (100, '1'), (1, '0.01'), (10, '0.1'), (10000, '100'), (1250, '12.5')]) {
+        expect(formatRatePercent(bp), text);
+      }
+    });
+
+    test('the cache keeps the deduction; an entry written before the option existed reads back as "not chosen"; a broken deduction is ignored', () {
+      final shop2 = Uri.parse(shop2Api);
+      const withDeduction = CalculatorNotice(configured: true, infoText: 'x', warningText: '', contactPhone: '', updatedAt: 9, deductionMode: deductionCustom, deductionRateBp: 270);
+      expect(decodeCalculatorNoticeCache(shop2, encodeCalculatorNoticeCache(shop2, withDeduction)), withDeduction);
+      final oldEntry = '{"host":"${shop2.host}","configured":true,"infoText":"x","warningText":"","contactPhone":"","updatedAt":9}';
+      final read = decodeCalculatorNoticeCache(shop2, oldEntry)!;
+      expect([read.configured, read.infoText, read.deductionMode, read.deductionRateBp], [true, 'x', null, null]);
+      for (final bad in ['"deductionMode":"custom","deductionRateBp":101000', '"deductionMode":"custom","deductionRateBp":"5"', '"deductionMode":"weird","deductionRateBp":1']) {
+        expect(decodeCalculatorNoticeCache(shop2, oldEntry.replaceFirst('"updatedAt":9', '"updatedAt":9,$bad')), isNull, reason: bad);
+      }
+    });
+
+    final amounts = <String, ({Map<String, Object?> deduction, String net, String? line})>{
+      'none': (deduction: {'deductionMode': 'none', 'deductionRateBp': 0}, net: '865,000원', line: null),
+      'freelance_3_3': (deduction: freelance, net: '836,455원', line: '자동으로 3.3% 계산이 돼요.'),
+      'custom 1%': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 100}, net: '856,350원', line: '자동으로 1% 계산이 돼요.'),
+      'custom 2.7%': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 270}, net: '841,645원', line: '자동으로 2.7% 계산이 돼요.'),
+      'custom 5%': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 500}, net: '821,750원', line: '자동으로 5% 계산이 돼요.'),
+      'custom 5.00 written as 500': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 500}, net: '821,750원', line: '자동으로 5% 계산이 돼요.'),
+      'custom 100%': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 10000}, net: '0원', line: '자동으로 100% 계산이 돼요.'),
+      'custom 0%': (deduction: {'deductionMode': 'custom', 'deductionRateBp': 0}, net: '865,000원', line: null),
+    };
+    for (final api in [kbApi, shop2Api]) {
+      for (final entry in amounts.entries) {
+        testWidgets('${api == kbApi ? 'kb_main' : 'shop2'} with ${entry.key}: the amount and the sentence follow the server setting, whatever the note text says', (tester) async {
+          // the notes talk about other percentages on purpose: they take no part in the calculation
+          install(api).notice = (_) async => configured('수수료 50% 공제, 3.3% 아님', '10% 입니다', '', 1700000000000, entry.value.deduction);
+          await openWork(tester);
+          await openCalculator(tester);
+          await settle(tester);
+          await tester.enterText(find.byType(TextField), '10000');
+          await tester.pump();
+          expect(find.text('현재 총 근무 시간: 86시간 30분'), findsOneWidget);
+          expect(find.text(entry.value.net), findsOneWidget);
+          if (entry.value.line == null) { expect(find.textContaining('자동으로'), findsNothing); } else { expect(find.text(entry.value.line!), findsOneWidget); }
+          expect(find.text('수수료 50% 공제, 3.3% 아님'), findsOneWidget);
+          await tester.pumpWidget(const SizedBox());
+        });
+      }
+    }
+
+    testWidgets('settings saved with no deduction chosen: kb_main still deducts 3.3% (same amount as before), another build deducts nothing', (tester) async {
+      for (final (api, net, line) in [(kbApi, '836,455원', fixedLine), (shop2Api, '865,000원', null)]) {
+        install(api).notice = (_) async => configured('안내', '', '0212345678', 1700000000000, const {});
+        await openWork(tester);
+        await openCalculator(tester);
+        await settle(tester);
+        await tester.enterText(find.byType(TextField), '10000');
+        await tester.pump();
+        expect(find.text(net), findsOneWidget, reason: api);
+        if (line == null) { expect(find.textContaining('자동으로'), findsNothing); } else { expect(find.text(line), findsOneWidget); }
+        expect(find.text('안내'), findsOneWidget); expect(find.text('문의: 0212345678'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('a background answer changes the amount and the sentence on the open screen at once, and the cache keeps the deduction', (tester) async {
+      final fake = install(kbApi);
+      final held = Completer<http.Response>();
+      fake.notice = (_) => held.future;
+      await openWork(tester);
+      await openCalculator(tester);
+      await tester.enterText(find.byType(TextField), '10000');
+      await tester.pump();
+      await settle(tester); // the month total is in; the notes request is still open
+      expect(find.text('836,455원'), findsOneWidget); // kb_main's own 3.3% while waiting
+      expect(find.text(fixedLine), findsOneWidget);
+      held.complete(configured('안내', '', '', 1700000000001, const {'deductionMode': 'custom', 'deductionRateBp': 500}));
+      await settle(tester);
+      expect(find.text('821,750원'), findsOneWidget);
+      expect(find.text('836,455원'), findsNothing);
+      expect(find.text('자동으로 5% 계산이 돼요.'), findsOneWidget); expect(find.text(fixedLine), findsNothing);
+      expect(find.text('10000'), findsOneWidget); // the typed wage was not touched
+      final cached = jsonDecode((await secureStorage.read(key: cacheKey(kbApi)))!) as Map<String, dynamic>;
+      expect([cached['deductionMode'], cached['deductionRateBp']], ['custom', 500]);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('a stored deduction is used the moment the calculator opens; a cache from before the option existed is read without a crash', (tester) async {
+      const stored = CalculatorNotice(configured: true, infoText: '캐시 안내', updatedAt: 3, deductionMode: deductionCustom, deductionRateBp: 270);
+      final fake = install(shop2Api);
+      final held = Completer<http.Response>();
+      fake.notice = (_) => held.future;
+      await openWork(tester, storage: {cacheKey(shop2Api): encodeCalculatorNoticeCache(Uri.parse(shop2Api), stored)});
+      await openCalculator(tester);
+      await settle(tester);
+      await tester.enterText(find.byType(TextField), '10000');
+      await tester.pump();
+      expect(find.text('841,645원'), findsOneWidget);
+      expect(find.text('자동으로 2.7% 계산이 돼요.'), findsOneWidget);
+      held.complete(notConfigured);
+      await settle(tester);
+      expect(find.text('865,000원'), findsOneWidget); // "not configured" on shop2: nothing is deducted
+      expect(find.textContaining('자동으로'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+
+      // a v1 entry written by the previous version: no deduction fields at all
+      for (final (api, net, line) in [(kbApi, '836,455원', fixedLine), (shop2Api, '865,000원', null)]) {
+        final host = Uri.parse(api).host;
+        final legacy = '{"host":"$host","configured":true,"infoText":"옛 캐시","warningText":"","contactPhone":"","updatedAt":1}';
+        final legacyFake = install(api);
+        final legacyHeld = Completer<http.Response>();
+        legacyFake.notice = (_) => legacyHeld.future;
+        await openWork(tester, storage: {cacheKey(api): legacy});
+        await openCalculator(tester);
+        await settle(tester);
+        await tester.enterText(find.byType(TextField), '10000');
+        await tester.pump();
+        expect(find.text('옛 캐시'), findsOneWidget);
+        expect(find.text(net), findsOneWidget, reason: api);
+        if (line == null) { expect(find.textContaining('자동으로'), findsNothing); } else { expect(find.text(line), findsOneWidget); }
+        expect(tester.takeException(), isNull);
+        legacyHeld.complete(notConfigured);
+        await settle(tester);
+        await tester.pumpWidget(const SizedBox());
+      }
+    });
+
+    testWidgets('a failed or never-answered request leaves the build\'s own calculation in place (kb_main 3.3%, shop2 none)', (tester) async {
+      for (final (api, net) in [(kbApi, '836,455원'), (shop2Api, '865,000원')]) {
+        install(api).notice = (_) async => json({'success': false, 'code': 'EMPLOYEE_UNAVAILABLE'}, 503);
+        await openWork(tester);
+        await openCalculator(tester);
+        await settle(tester);
+        await tester.enterText(find.byType(TextField), '10000');
+        await tester.pump();
+        expect(find.text(net), findsOneWidget, reason: api);
+        expect(find.byType(SnackBar), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      }
+      final fake = install(shop2Api);
+      fake.notice = (_) => Completer<http.Response>().future;
+      await openWork(tester);
+      await openCalculator(tester);
+      await tester.pump(apiCallTimeout + const Duration(seconds: 1));
+      await tester.enterText(find.byType(TextField), '10000');
+      await tester.pump();
+      expect(find.text('865,000원'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets('an answer with a deduction the app does not understand is ignored: the screen and the cache stay as they were', (tester) async {
+      const stored = CalculatorNotice(configured: true, infoText: '지금 안내', updatedAt: 5, deductionMode: deductionCustom, deductionRateBp: 500);
+      install(shop2Api).notice = (_) async => configured('새 안내', '', '', 6, const {'deductionMode': 'brand_new_mode', 'deductionRateBp': 7});
+      await openWork(tester, storage: {cacheKey(shop2Api): encodeCalculatorNoticeCache(Uri.parse(shop2Api), stored)});
+      await openCalculator(tester);
+      await settle(tester);
+      await tester.enterText(find.byType(TextField), '10000');
+      await tester.pump();
+      expect(find.text('지금 안내'), findsOneWidget); expect(find.text('새 안내'), findsNothing);
+      expect(find.text('821,750원'), findsOneWidget);
+      expect(await secureStorage.read(key: cacheKey(shop2Api)), encodeCalculatorNoticeCache(Uri.parse(shop2Api), stored));
       await tester.pumpWidget(const SizedBox());
     });
   });

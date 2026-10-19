@@ -29,7 +29,40 @@ Widget _page({
   saveWage: saveWage ?? ((_) async {}),
 ));
 
+// The calculation exactly as it was written when 3.3% was fixed in the page.
+int oldFixedNet(int wage, int minutes) {
+  final gross = wage * (minutes / 60.0);
+  final deduction = gross * 0.033;
+  final net = (gross - deduction).round();
+  return net < 0 ? 0 : net;
+}
+
 void main() {
+  test('netPayWon with 330 basis points gives the very same won as the old fixed 3.3% for every wage and time tried', () {
+    var checked = 0;
+    for (var wage = 0; wage <= 60000; wage += 7) {
+      for (final minutes in [0, 1, 7, 30, 59, 60, 61, 90, 175, 2400, 5190, 9999, 12345, 17640]) {
+        expect(netPayWon(wage: wage, totalMinutes: minutes, rateBp: 330), oldFixedNet(wage, minutes), reason: 'wage $wage minutes $minutes');
+        checked++;
+      }
+    }
+    expect(checked, greaterThan(100000));
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 330), 836455); // 86.5h x 10000 less 3.3%
+  });
+
+  test('netPayWon: no deduction, other rates, 100%, never below zero, rounded to the won', () {
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 0), 865000);
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 100), 856350);
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 270), 841645);
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 500), 821750);
+    expect(netPayWon(wage: 10000, totalMinutes: 5190, rateBp: 10000), 0);
+    expect(netPayWon(wage: 0, totalMinutes: 5190, rateBp: 500), 0);
+    expect(netPayWon(wage: 9860, totalMinutes: 61, rateBp: 0), 10024); // 10024.33 rounds down
+    expect(netPayWon(wage: 10000, totalMinutes: 7, rateBp: 0), 1167); // 1166.67 rounds up
+    expect(netPayWon(wage: 10000, totalMinutes: 0, rateBp: 330), 0);
+    for (var bp = 0; bp <= 10000; bp += 25) { expect(netPayWon(wage: 12345, totalMinutes: 4321, rateBp: bp), inInclusiveRange(0, 12345 * 4321 ~/ 60 + 1)); }
+  });
+
   testWidgets('tapping the calculator menu item on the work page opens CalculatorPage', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(1200, 2400);

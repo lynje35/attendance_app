@@ -20,6 +20,14 @@ String formatWon(int value) {
   return buffer.toString();
 }
 
+// 예상 실 지급액 in won: wage x hours, less rateBp basis points, rounded to the won and never below 0. rateBp / 10000 is exactly
+// the double 0.033 the calculator used when 3.3% was fixed (for 330), so kb_main's amounts are the same as before to the won.
+int netPayWon({required int wage, required int totalMinutes, required int rateBp}) {
+  final gross = wage * (totalMinutes / 60.0);
+  final net = (gross - gross * (rateBp / 10000)).round();
+  return net < 0 ? 0 : net;
+}
+
 class CalculatorPage extends StatefulWidget {
   const CalculatorPage({
     super.key,
@@ -42,8 +50,9 @@ class CalculatorPage extends StatefulWidget {
   final DateTime now;
   final Future<String?> Function() readSavedWage;
   final Future<void> Function(String) saveWage;
-  // The notes shown under 예상 실 지급액, already resolved for this build (see calculator_notice.dart). Only that area follows it.
-  // Without one the page shows the kb_main wording it always had; lib/main.dart always passes the value for its own build.
+  // The settings of this build's organization, already resolved for it (see calculator_notice.dart): the notes under
+  // 예상 실 지급액 and the deduction. Without one the page shows the kb_main wording and 3.3% it always had; lib/main.dart
+  // always passes the value for its own build.
   final ValueListenable<CalculatorNotice>? notice;
 
   @override
@@ -201,16 +210,20 @@ class _CalculatorPageState extends State<CalculatorPage> {
 
   @override
   Widget build(BuildContext context) {
+    final listenable = widget.notice;
+    if (listenable == null) return _page(context, CalculatorNotice.kbBuiltIn);
+    return ValueListenableBuilder<CalculatorNotice>(valueListenable: listenable, builder: (context, notice, _) => _page(context, notice));
+  }
+
+  Widget _page(BuildContext context, CalculatorNotice notice) {
     final wage = int.tryParse(_wageController.text.trim()) ?? 0;
     // While a newly selected month is still loading, the previous month's total is
     // deliberately not shown as if it belonged to the new month (see spec item 6):
     // both derived numbers below fall back to 0 until this load finishes.
     final knownMinutes = _loading || _error != null ? 0 : _totalMinutes;
-    final totalHours = knownMinutes / 60.0;
-    final gross = wage * totalHours;
-    final deduction = gross * 0.033;
-    final net = (gross - deduction).round();
-    final displayNet = net < 0 ? 0 : net;
+    // A resolved notice always has a deduction; without one nothing is deducted (never kb_main's 3.3% by guesswork).
+    final rateBp = notice.deductionRateBp ?? 0;
+    final displayNet = netPayWon(wage: wage, totalMinutes: knownMinutes, rateBp: rateBp);
     final hours = _totalMinutes ~/ 60;
     final minutes = _totalMinutes % 60;
 
@@ -303,14 +316,8 @@ class _CalculatorPageState extends State<CalculatorPage> {
                                 )
                               : Text('${formatWon(displayNet)}원', style: Theme.of(context).textTheme.headlineMedium),
                           const Divider(height: 32),
-                          const Text('자동으로 3.3% 계산이 돼요.'),
-                          if (widget.notice == null)
-                            _noticeArea(CalculatorNotice.kbBuiltIn)
-                          else
-                            ValueListenableBuilder<CalculatorNotice>(
-                              valueListenable: widget.notice!,
-                              builder: (context, notice, _) => _noticeArea(notice),
-                            ),
+                          if (rateBp > 0) Text('자동으로 ${formatRatePercent(rateBp)}% 계산이 돼요.'),
+                          _noticeArea(notice),
                         ],
                       ),
                     ),
