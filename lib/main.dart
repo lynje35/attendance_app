@@ -2131,6 +2131,188 @@ class _PasswordChangeDialogState
   }
 }
 
+// 출퇴근 관리 메인 화면 전용 스타일 (Deep Teal). 앱 전체 테마는 바꾸지 않고, 이 화면의 위젯에만 직접 적용합니다.
+const Color _wkTeal = Color(0xFF187D76);
+const Color _wkTealDeep = Color(0xFF0F5F59);
+const Color _wkBackground = Color(0xFFF1F6F5);
+const Color _wkText = Color(0xFF25282B);
+const Color _wkSub = Color(0xFF777D83);
+const Color _wkTint = Color(0xFFD7EBE8);
+const Color _wkLine = Color(0xFFE1ECEA);
+const Color _wkDisabledBackground = Color(0xFFE4E9E8);
+const Color _wkDisabledForeground = Color(0xFF9AA1A6);
+
+final RoundedRectangleBorder _wkButtonShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.circular(16),
+);
+
+// 근무기록 달력 카드: 메인 화면의 다른 카드와 같은 흰 카드·옅은 테두리
+final RoundedRectangleBorder _wkCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.circular(16),
+  side: const BorderSide(color: _wkLine),
+);
+
+// 특이사항 입력창: 평소에는 옅은 틸 테두리, 입력 중에는 딥 틸
+// 입력창 라벨: 평소에는 보조 글자색, 입력 중(포커스)에는 딥 틸 - 떠오른 라벨에도 같은 스타일을 씁니다.
+final TextStyle _wkFieldLabelStyle = WidgetStateTextStyle.resolveWith(
+  (states) => TextStyle(
+    color: states.contains(WidgetState.focused) ? _wkTeal : _wkSub,
+  ),
+);
+
+const OutlineInputBorder _wkFieldBorder = OutlineInputBorder(
+  borderRadius: BorderRadius.all(Radius.circular(12)),
+  borderSide: BorderSide(color: Color(0xFFBFD6D3)),
+);
+
+// 출근하기: 주요 행동
+final ButtonStyle _wkClockInStyle = FilledButton.styleFrom(
+  backgroundColor: _wkTeal,
+  foregroundColor: Colors.white,
+  disabledBackgroundColor: _wkDisabledBackground,
+  disabledForegroundColor: _wkDisabledForeground,
+  shape: _wkButtonShape,
+);
+
+// 퇴근하기: 연한 배경에 테두리를 두어 활성일 때 눈에 띄고, 비활성일 때는 회색이 됩니다.
+final ButtonStyle _wkClockOutStyle = FilledButton.styleFrom(
+  backgroundColor: _wkTint,
+  foregroundColor: _wkTeal,
+  disabledBackgroundColor: _wkDisabledBackground,
+  disabledForegroundColor: _wkDisabledForeground,
+  shape: _wkButtonShape,
+).copyWith(
+  side: WidgetStateProperty.resolveWith(
+    (states) => states.contains(WidgetState.disabled)
+        ? null
+        : const BorderSide(color: _wkTeal, width: 1.5),
+  ),
+);
+
+// 근무기록·계산기: 보조 행동
+final ButtonStyle _wkOutlinedStyle = OutlinedButton.styleFrom(
+  backgroundColor: Colors.white,
+  foregroundColor: _wkText,
+  iconColor: _wkTeal,
+  disabledForegroundColor: _wkDisabledForeground,
+  padding: const EdgeInsets.symmetric(horizontal: 8),
+  side: const BorderSide(color: Color(0xFFBFD6D3)),
+  shape: _wkButtonShape,
+);
+
+// 비밀번호 변경·로그아웃: 가장 낮은 우선순위
+final ButtonStyle _wkQuietStyle = TextButton.styleFrom(
+  foregroundColor: _wkText,
+  iconColor: _wkSub,
+  disabledForegroundColor: _wkDisabledForeground,
+  padding: const EdgeInsets.symmetric(horizontal: 8),
+  shape: _wkButtonShape,
+);
+
+Widget _wkCard({required Widget child}) {
+  return Card(
+    margin: EdgeInsets.zero,
+    elevation: 0,
+    color: Colors.white,
+    surfaceTintColor: Colors.transparent,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(16),
+      side: const BorderSide(color: _wkLine),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: child,
+    ),
+  );
+}
+
+// 좁은 화면에서 글자가 잘리지 않도록 버튼 안의 글자만 줄여서 맞춥니다.
+Widget _wkFitLabel(
+  String text, {
+  required double fontSize,
+  required FontWeight weight,
+}) {
+  return FittedBox(
+    fit: BoxFit.scaleDown,
+    child: Text(
+      text,
+      maxLines: 1,
+      style: TextStyle(fontSize: fontSize, fontWeight: weight),
+    ),
+  );
+}
+
+Widget _wkTimeTile(String label, String value) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: _wkBackground,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: _wkSub,
+          ),
+        ),
+        const SizedBox(height: 2),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: _wkText,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _wkInfoRow(
+  String label,
+  String value, {
+  FontWeight labelWeight = FontWeight.w400,
+  FontWeight valueWeight = FontWeight.w700,
+}) {
+  return Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(
+        label,
+        style: TextStyle(
+          fontSize: 14,
+          color: _wkText,
+          fontWeight: labelWeight,
+        ),
+      ),
+      const SizedBox(width: 12),
+      Flexible(
+        child: Text(
+          value,
+          textAlign: TextAlign.end,
+          style: TextStyle(
+            fontSize: 14,
+            color: _wkText,
+            fontWeight: valueWeight,
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+
 class WorkPage extends StatefulWidget {
   final String store;
   final String employee;
@@ -4853,6 +5035,11 @@ class _WorkPageState extends State<WorkPage>
           CrossAxisAlignment.stretch,
       children: [
         Card(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape: _wkCardShape,
           child: Padding(
             padding: const EdgeInsets.all(18),
             child: Column(
@@ -4866,6 +5053,7 @@ class _WorkPageState extends State<WorkPage>
                               calendarMonth.isAfter(earliestWorkMonth)
                           ? () => _changeCalendarMonth(-1)
                           : null,
+                      color: _wkTeal,
                       icon: const Icon(Icons.chevron_left),
                     ),
                     Flexible(
@@ -4875,6 +5063,7 @@ class _WorkPageState extends State<WorkPage>
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
+                          color: _wkText,
                         ),
                       ),
                     ),
@@ -4884,6 +5073,7 @@ class _WorkPageState extends State<WorkPage>
                               calendarMonth.isBefore(DateTime(now.year, now.month, 1))
                           ? () => _changeCalendarMonth(1)
                           : null,
+                      color: _wkTeal,
                       icon: const Icon(Icons.chevron_right),
                     ),
                   ],
@@ -4904,8 +5094,8 @@ class _WorkPageState extends State<WorkPage>
                               color: i == 0
                                   ? Colors.red
                                   : i == 6
-                                      ? Colors.blue
-                                      : Colors.grey,
+                                      ? _wkTeal
+                                      : _wkSub,
                             ),
                           ),
                         ),
@@ -4946,14 +5136,14 @@ class _WorkPageState extends State<WorkPage>
 
                     return Material(
                       color: worked
-                          ? const Color(0xFFE8F0FE)
+                          ? _wkTint
                           : Colors.transparent,
                       shape: RoundedRectangleBorder(
                         borderRadius:
                             BorderRadius.circular(10),
                         side: BorderSide(
                           color: today
-                              ? const Color(0xFF2563EB)
+                              ? _wkTeal
                               : Colors.transparent,
                           width: today ? 2 : 1,
                         ),
@@ -4976,10 +5166,8 @@ class _WorkPageState extends State<WorkPage>
                                   ? FontWeight.bold
                                   : FontWeight.normal,
                               color: worked
-                                  ? const Color(
-                                      0xFF1D4ED8,
-                                    )
-                                  : null,
+                                  ? _wkTealDeep
+                                  : _wkText,
                             ),
                           ),
                         ),
@@ -4995,23 +5183,23 @@ class _WorkPageState extends State<WorkPage>
                     Icon(
                       Icons.circle,
                       size: 10,
-                      color: Color(0xFF2563EB),
+                      color: _wkTeal,
                     ),
                     SizedBox(width: 5),
                     Text(
                       '근무일',
-                      style: TextStyle(fontSize: 12),
+                      style: TextStyle(fontSize: 12, color: _wkSub),
                     ),
                     SizedBox(width: 18),
                     Icon(
                       Icons.radio_button_unchecked,
                       size: 13,
-                      color: Color(0xFF2563EB),
+                      color: _wkTeal,
                     ),
                     SizedBox(width: 5),
                     Text(
                       '오늘',
-                      style: TextStyle(fontSize: 12),
+                      style: TextStyle(fontSize: 12, color: _wkSub),
                     ),
                   ],
                 ),
@@ -5036,11 +5224,12 @@ class _WorkPageState extends State<WorkPage>
                       fontWeight: calendarRecords.isEmpty
                           ? FontWeight.normal
                           : FontWeight.w900,
-                      color: calendarRecords.isEmpty ? Colors.grey : null,
+                      color: calendarRecords.isEmpty ? _wkSub : _wkText,
                     ),
                   ),
                 if (calendarError != null)
                   TextButton(
+                    style: TextButton.styleFrom(foregroundColor: _wkTeal),
                     onPressed: isCalendarLoading
                         ? null
                         : () {
@@ -5058,6 +5247,11 @@ class _WorkPageState extends State<WorkPage>
         ),
         const SizedBox(height: 12),
         Card(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape: _wkCardShape,
           child: Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: 18,
@@ -5080,6 +5274,7 @@ class _WorkPageState extends State<WorkPage>
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
+                    color: _wkTealDeep,
                   ),
                 ),
               ],
@@ -5140,7 +5335,19 @@ class _WorkPageState extends State<WorkPage>
         _handleSystemBack();
       },
       child: Scaffold(
+        backgroundColor: _wkBackground,
         appBar: AppBar(
+          backgroundColor: _wkBackground,
+          foregroundColor: _wkText,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          titleSpacing: 4,
+          // 테마의 글자 설정(NotoSansKR 대체 글꼴 포함)을 이어받아야 웹에서도 제목 한글이 깨지지 않습니다.
+          titleTextStyle: Theme.of(context).textTheme.titleLarge?.copyWith(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: _wkText,
+          ),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             tooltip: '로그인 화면으로 돌아가기',
@@ -5155,200 +5362,230 @@ class _WorkPageState extends State<WorkPage>
           fit: StackFit.expand,
           children: [
             SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.stretch,
             children: [
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
+              _wkCard(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: _wkTint,
+                        borderRadius:
+                            BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.storefront_outlined,
+                        color: _wkTeal,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            shownStore,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight:
+                                  FontWeight.bold,
+                              color: _wkText,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.employee,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              color: _wkSub,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _wkCard(
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: attendanceStatus ==
+                                    'WORKING'
+                                ? Colors.green
+                                : isCompleted
+                                    ? const Color(
+                                        0xFF2563EB,
+                                      )
+                                    : Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            visibleStatusText,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight:
+                                  FontWeight.bold,
+                              color: attendanceStatus ==
+                                      'WORKING'
+                                  ? Colors.green
+                                  : isCompleted
+                                      ? const Color(
+                                          0xFF2563EB,
+                                        )
+                                      : Colors.grey,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (isCompleted) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        '오늘 근무시간',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _wkSub,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
                       Text(
-                        shownStore,
+                        completedWorkedText.isEmpty
+                            ? '0시간 0분'
+                            : completedWorkedText,
                         style: const TextStyle(
                           fontSize: 24,
                           fontWeight:
-                              FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        widget.employee,
-                        style: const TextStyle(
-                          fontSize: 18,
+                              FontWeight.w800,
+                          color: _wkText,
                         ),
                       ),
                     ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      Text(
-                        visibleStatusText,
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight:
-                              FontWeight.bold,
-                          color: attendanceStatus ==
-                                  'WORKING'
-                              ? Colors.green
-                              : isCompleted
-                                  ? const Color(
-                                      0xFF2563EB,
-                                    )
-                                  : Colors.grey,
-                        ),
-                      ),
-                      if (isCompleted) ...[
-                        const SizedBox(height: 18),
-                        const Text(
-                          '오늘 근무시간',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          completedWorkedText.isEmpty
-                              ? '0시간 0분'
-                              : completedWorkedText,
-                          style: const TextStyle(
-                            fontSize: 25,
-                            fontWeight:
-                                FontWeight.w800,
-                          ),
-                        ),
-                      ],
-                      if (!isVerifying) ...[
-                        const SizedBox(height: 20),
-                        Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment
-                                  .spaceBetween,
-                          children: [
-                            const Text('출근 시간'),
-                            Text(visibleClockInText),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment
-                                  .spaceBetween,
-                          children: [
-                            const Text('퇴근 시간'),
-                            Text(visibleClockOutText),
-                          ],
-                        ),
-                      ],
-                      if (attendanceStatus ==
-                          'WORKING') ...[
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment
-                                  .spaceBetween,
-                          children: [
-                            const Text('현재 근무시간'),
-                            Text(
-                              liveWorkedText.isEmpty
-                                  ? '0분'
-                                  : liveWorkedText,
-                              style: const TextStyle(
-                                fontWeight:
-                                    FontWeight.w700,
-                              ),
+                    if (!isVerifying) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _wkTimeTile(
+                              '출근 시간',
+                              visibleClockInText,
                             ),
-                          ],
-                        ),
-                      ],
-                      if (isCompleted) ...[
-                        if (showBreak) ...[
-                          const SizedBox(height: 12),
-                          Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment
-                                    .spaceBetween,
-                            children: [
-                              const Text('휴게시간'),
-                              Text(
-                                completedBreakText
-                                        .isEmpty
-                                    ? '0시간 0분'
-                                    : completedBreakText,
-                              ),
-                            ],
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _wkTimeTile(
+                              '퇴근 시간',
+                              visibleClockOutText,
+                            ),
                           ),
                         ],
-                        const Divider(height: 30),
-                        Row(
-                          mainAxisAlignment:
-                              MainAxisAlignment
-                                  .spaceBetween,
-                          children: [
-                            const Text(
-                              '총근무시간',
-                              style: TextStyle(
-                                fontWeight:
-                                    FontWeight.w700,
-                              ),
-                            ),
-                            Text(
-                              completedGrossText.isEmpty
-                                  ? completedWorkedText
-                                  : completedGrossText,
-                              style: const TextStyle(
-                                fontWeight:
-                                    FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          '출근하기 버튼은 바로 사용할 수 있습니다.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
+                      ),
+                    ],
+                    if (attendanceStatus ==
+                        'WORKING') ...[
+                      const SizedBox(height: 12),
+                      _wkInfoRow(
+                        '현재 근무시간',
+                        liveWorkedText.isEmpty
+                            ? '0분'
+                            : liveWorkedText,
+                      ),
+                    ],
+                    if (isCompleted) ...[
+                      if (showBreak) ...[
+                        const SizedBox(height: 10),
+                        _wkInfoRow(
+                          '휴게시간',
+                          completedBreakText.isEmpty
+                              ? '0시간 0분'
+                              : completedBreakText,
+                          valueWeight: FontWeight.w400,
                         ),
                       ],
+                      const Divider(
+                        height: 24,
+                        color: _wkLine,
+                      ),
+                      _wkInfoRow(
+                        '총근무시간',
+                        completedGrossText.isEmpty
+                            ? completedWorkedText
+                            : completedGrossText,
+                        labelWeight: FontWeight.w700,
+                        valueWeight: FontWeight.w800,
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '출근하기 버튼은 바로 사용할 수 있습니다.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: _wkSub,
+                        ),
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
               if (attendanceStatus ==
                   'WORKING') ...[
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
                 TextField(
                   controller: noteController,
+                  cursorColor: _wkTeal,
                   maxLines: 3,
                   minLines: 2,
                   enabled: !isPasswordChanging,
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: '특이사항 (선택)',
+                    labelStyle: _wkFieldLabelStyle,
+                    floatingLabelStyle: _wkFieldLabelStyle,
                     hintText:
                         '퇴근 기록에 남길 내용이 있으면 입력해주세요.',
-                    border: OutlineInputBorder(),
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: _wkFieldBorder,
+                    enabledBorder: _wkFieldBorder,
+                    disabledBorder: _wkFieldBorder,
+                    focusedBorder: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(
+                        Radius.circular(12),
+                      ),
+                      borderSide: BorderSide(
+                        color: _wkTeal,
+                        width: 2,
+                      ),
+                    ),
+                    prefixIconColor: _wkSub,
                     prefixIcon:
-                        Icon(Icons.edit_note),
+                        const Icon(Icons.edit_note),
                   ),
                 ),
               ],
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               SizedBox(
-                height: 60,
+                height: 56,
                 child: FilledButton(
+                  style: _wkClockInStyle,
                   onPressed:
                               authActionPending ||
                               isPasswordChanging ||
@@ -5363,14 +5600,18 @@ class _WorkPageState extends State<WorkPage>
                           : requestClockIn,
                   child: const Text(
                     '출근하기',
-                    style: TextStyle(fontSize: 18),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               SizedBox(
-                height: 60,
+                height: 56,
                 child: FilledButton.tonal(
+                  style: _wkClockOutStyle,
                   onPressed:
                       isPasswordChanging ||
                               isProcessing ||
@@ -5379,76 +5620,115 @@ class _WorkPageState extends State<WorkPage>
                           : requestClockOut,
                   child: const Text(
                     '퇴근하기',
-                    style: TextStyle(fontSize: 18),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
               const SizedBox(height: 14),
-              SizedBox(
-                height: 54,
-                child: OutlinedButton.icon(
-                  onPressed:
-                      !isPasswordChanging
-                          ? toggleWorkHistory
-                          : null,
-                  icon: Icon(
-                    showWorkHistory
-                        ? Icons.expand_less
-                        : Icons.calendar_month,
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: OutlinedButton.icon(
+                        style: _wkOutlinedStyle,
+                        onPressed:
+                            !isPasswordChanging
+                                ? toggleWorkHistory
+                                : null,
+                        icon: Icon(
+                          showWorkHistory
+                              ? Icons.expand_less
+                              : Icons.calendar_month,
+                          size: 20,
+                        ),
+                        label: _wkFitLabel(
+                          showWorkHistory
+                              ? '근무기록 닫기'
+                              : '근무기록',
+                          fontSize: 15,
+                          weight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   ),
-                  label: Text(
-                    showWorkHistory
-                        ? '근무기록 닫기'
-                        : '근무기록',
-                    style:
-                        const TextStyle(fontSize: 16),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: OutlinedButton.icon(
+                        style: _wkOutlinedStyle,
+                        onPressed:
+                            !isPasswordChanging
+                                ? _openCalculator
+                                : null,
+                        icon: const Icon(
+                          Icons.calculate,
+                          size: 20,
+                        ),
+                        label: _wkFitLabel(
+                          '계산기',
+                          fontSize: 15,
+                          weight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
               if (showWorkHistory) ...[
                 const SizedBox(height: 10),
                 _buildCalendar(),
               ],
-              const SizedBox(height: 14),
-              SizedBox(
-                height: 54,
-                child: OutlinedButton.icon(
-                  onPressed:
-                      !isPasswordChanging
-                          ? _openCalculator
-                          : null,
-                  icon: const Icon(Icons.calculate),
-                  label: const Text(
-                    '계산기',
-                    style:
-                        TextStyle(fontSize: 16),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: TextButton.icon(
+                        style: _wkQuietStyle,
+                        onPressed:
+                            !isPasswordChanging
+                                ? openPasswordChangeDialog
+                                : null,
+                        icon: const Icon(
+                          Icons.lock_reset,
+                          size: 20,
+                        ),
+                        label: _wkFitLabel(
+                          '비밀번호 변경',
+                          fontSize: 14,
+                          weight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                height: 54,
-                child: OutlinedButton.icon(
-                  onPressed:
-                      !isPasswordChanging
-                          ? openPasswordChangeDialog
-                          : null,
-                  icon: const Icon(Icons.lock_reset),
-                  label: const Text(
-                    '비밀번호 변경',
-                    style:
-                        TextStyle(fontSize: 16),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: TextButton.icon(
+                        style: _wkQuietStyle,
+                        onPressed:
+                            !isPasswordChanging ? _logout : null,
+                        icon: const Icon(
+                          Icons.logout,
+                          size: 20,
+                        ),
+                        label: _wkFitLabel(
+                          '로그아웃',
+                          fontSize: 14,
+                          weight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-              const SizedBox(height: 10),
-              TextButton.icon(
-                onPressed:
-                    !isPasswordChanging ? _logout : null,
-                icon: const Icon(Icons.logout),
-                label: const Text('로그아웃'),
-              ),
-              const SizedBox(height: 24),
             ],
           ),
         ),
