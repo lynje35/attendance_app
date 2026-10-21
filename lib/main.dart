@@ -2209,6 +2209,21 @@ final ButtonStyle _wkQuietStyle = TextButton.styleFrom(
   shape: _wkButtonShape,
 );
 
+// 출근·퇴근 확인 팝업: 취소는 연한 민트 배경에 진한 틸 글씨, 확인은 딥 틸 배경에 흰 글씨. 둘 다 누르기 편한 높이(48)입니다.
+// 글자 크기·굵기는 버튼 스타일이 아니라 Text에 줍니다. 버튼의 textStyle을 직접 지정하면 테마의 NotoSansKR 대체 글꼴이 빠져 웹에서 한글이 깨집니다.
+final ButtonStyle _wkDialogCancelStyle = TextButton.styleFrom(
+  backgroundColor: _wkTint,
+  foregroundColor: _wkTealDeep,
+  minimumSize: const Size(96, 48),
+  shape: _wkButtonShape,
+);
+final ButtonStyle _wkDialogConfirmStyle = FilledButton.styleFrom(
+  backgroundColor: _wkTeal,
+  foregroundColor: Colors.white,
+  minimumSize: const Size(96, 48),
+  shape: _wkButtonShape,
+);
+
 Widget _wkCard({required Widget child}) {
   return Card(
     margin: EdgeInsets.zero,
@@ -3112,20 +3127,52 @@ class _WorkPageState extends State<WorkPage>
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          content: Text(message, textAlign: TextAlign.center),
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 24,
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          content: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: _wkText,
+            ),
+          ),
           actionsAlignment: MainAxisAlignment.center,
           actions: [
             TextButton(
+              style: _wkDialogCancelStyle,
               onPressed: () {
                 Navigator.of(dialogContext).pop(false);
               },
-              child: const Text('취소'),
+              child: const Text(
+                '취소',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
             FilledButton(
+              style: _wkDialogConfirmStyle,
               onPressed: () {
                 Navigator.of(dialogContext).pop(true);
               },
-              child: const Text('확인'),
+              child: const Text(
+                '확인',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
           ],
         );
