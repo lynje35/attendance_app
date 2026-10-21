@@ -209,7 +209,8 @@ void main() {
     // what the calendar says is unchanged: one work day (two records), 9시간 30분 in total
     expect(find.text('총 1일 근무'), findsOneWidget);
     expect(find.text('9시간 30분'), findsOneWidget);
-    expect(tester.widget<Text>(find.text('9시간 30분')).style!.color, const Color(0xFF0F5F59));
+    final total = tester.widget<Text>(find.text('9시간 30분')).style!; // the total-time value is the plain dark text color, same size and weight as before
+    expect([total.color, total.fontSize, total.fontWeight], [const Color(0xFF25282B), 18.0, FontWeight.w800]);
     expect(find.text('근무일'), findsOneWidget); expect(find.text('오늘'), findsOneWidget);
     for (final label in ['일', '월', '화', '수', '목', '금', '토']) { expect(find.text(label), findsOneWidget, reason: label); }
     // touching a work day still opens its details

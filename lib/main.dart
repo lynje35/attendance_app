@@ -5274,7 +5274,7 @@ class _WorkPageState extends State<WorkPage>
                   style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
-                    color: _wkTealDeep,
+                    color: _wkText,
                   ),
                 ),
               ],
