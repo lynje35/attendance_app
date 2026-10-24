@@ -2224,6 +2224,49 @@ final ButtonStyle _wkDialogConfirmStyle = FilledButton.styleFrom(
   shape: _wkButtonShape,
 );
 
+// 출근·퇴근 성공 알림: 딥 틸 바탕, 흰 체크 아이콘과 굵은 흰 글씨. 화면 터치를 막지 않도록 IgnorePointer 안에서만 씁니다.
+Widget _wkSuccessToast(String text) {
+  return Semantics(
+    liveRegion: true,
+    container: true,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 320),
+      child: Container(
+        key: const ValueKey('attendance-success-toast'),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        decoration: BoxDecoration(
+          color: _wkTeal,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 12,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.check_rounded, color: Colors.white, size: 22),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 Widget _wkCard({required Widget child}) {
   return Card(
     margin: EdgeInsets.zero,
@@ -2359,7 +2402,7 @@ class WorkPage extends StatefulWidget {
 }
 
 class _WorkPageState extends State<WorkPage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   bool isWorking = false;
   bool isProcessing = false;
   bool isLoginVerified = false;
@@ -2503,6 +2546,7 @@ class _WorkPageState extends State<WorkPage>
     calendarRetryTimer?.cancel();
     resumeStatusTimer?.cancel();
 
+    _successToastController.dispose();
     noteController.dispose();
     calculatorNotice.dispose();
 
@@ -3705,8 +3749,43 @@ class _WorkPageState extends State<WorkPage>
     );
   }
 
+  // 출근·퇴근 성공 알림은 서버가 저장 성공을 확정한 응답(clockIn / clockOut의 success)에서만 띄웁니다.
+  // 한 번에 하나만 있고, 다시 호출하면 처음부터 다시 시작합니다. 총 2초: 부드럽게 나타남(0.2초) → 유지(1.5초) → 투명해지며 사라짐(0.3초).
+  late final AnimationController _successToastController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2000),
+  );
+  late final Animation<double> _successToastOpacity = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween<double>(begin: 0, end: 1).chain(CurveTween(curve: Curves.easeOut)),
+      weight: 200,
+    ),
+    TweenSequenceItem(tween: ConstantTween<double>(1), weight: 1500),
+    TweenSequenceItem(
+      tween: Tween<double>(begin: 1, end: 0).chain(CurveTween(curve: Curves.easeIn)),
+      weight: 300,
+    ),
+  ]).animate(_successToastController);
+  String _successToastText = '';
+
+  void showAttendanceSuccessToast(String text) {
+    if (!mounted) return;
+
+    setState(() {
+      _successToastText = text;
+    });
+    _successToastController.forward(from: 0);
+  }
+
+  void _hideSuccessToast() {
+    _successToastController.reset();
+  }
+
   void _showAttendanceMessage(String message) {
     if (!mounted) return;
+
+    // 실패·확인 안내는 성공 알림에 가려지지 않게 알림을 먼저 치웁니다.
+    _hideSuccessToast();
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
@@ -4166,6 +4245,8 @@ class _WorkPageState extends State<WorkPage>
         }
       });
 
+      showAttendanceSuccessToast('출근 성공!');
+
       if (!hasQueuedClockOut) {
         _runAttendanceMaintenance(
           data['maintenanceMonthKey']?.toString(),
@@ -4322,6 +4403,8 @@ class _WorkPageState extends State<WorkPage>
         attendanceActionQueued = false;
         clockOutQueuedAfterClockIn = false;
       });
+
+      showAttendanceSuccessToast('퇴근 성공!');
 
       _runAttendanceMaintenance(
         data['maintenanceMonthKey']?.toString(),
@@ -5779,6 +5862,27 @@ class _WorkPageState extends State<WorkPage>
             ],
           ),
         ),
+            IgnorePointer(
+              child: AnimatedBuilder(
+                animation: _successToastController,
+                builder: (context, _) {
+                  if (_successToastController.isDismissed ||
+                      _successToastController.isCompleted) {
+                    return const SizedBox.shrink();
+                  }
+                  return Align(
+                    alignment: Alignment.center,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Opacity(
+                        opacity: _successToastOpacity.value,
+                        child: _wkSuccessToast(_successToastText),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
             if (isPasswordChanging)
               IgnorePointer(
                 child: Center(
