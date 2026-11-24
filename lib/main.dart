@@ -2472,6 +2472,17 @@ class _WorkPageState extends State<WorkPage>
   // 로그인 확인 전에 출근 버튼을 먼저 누른 경우 중복 clockIn 전송을 막는 용도입니다.
   String? verifiedLoginAttendanceStatus;
 
+  // 서버가 마지막으로 확인해 준 출퇴근 상태입니다. 요청을 보내지 않고 되돌릴 때
+  // 화면을 임의로 미출근으로 만들지 않고 이 상태로 되돌립니다.
+  Map<String, dynamic>? _lastServerAttendance;
+
+  // 출근·퇴근 요청을 시작할 때마다 1씩 올립니다. 그보다 먼저 출발한 자동 status 응답이
+  // 늦게 도착해도 최신 화면을 덮지 못하게 하는 기준입니다.
+  int _attendanceActionEpoch = 0;
+
+  // 서버가 현재 PIN을 명시적으로 거부하면 한 번만 정리하고 자동 조회를 멈춥니다.
+  bool _authenticationLostHandled = false;
+
   bool showWorkHistory = false;
   bool isCalendarLoading = false;
   bool hasCalendarLoaded = false;
@@ -2697,6 +2708,18 @@ class _WorkPageState extends State<WorkPage>
           loginReadyCompleter.complete(false);
         }
 
+        // 서버 장애(5xx 등 retryable)는 PIN 오류가 아니므로 저장된 검증값·로그인 기억·
+        // 대기 중인 출퇴근 요청을 지우지 않고, 연결 문제로 안내한 뒤 로그인 화면으로 돌아갑니다.
+        if (data['retryable'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('서버 연결에 실패했습니다. 잠시 후 다시 시도해 주세요.'),
+            ),
+          );
+          Navigator.of(context).pop();
+          return;
+        }
+
         // 로컬 즉시 로그인 뒤 서버에서 인증 실패가 확인되면
         // 오래된 검증값을 즉시 폐기합니다.
         unawaited(
@@ -2785,11 +2808,8 @@ class _WorkPageState extends State<WorkPage>
           passwordGeneration != _verifiedPasswordGeneration(widget.employeeId)) {
         return;
       }
-      if (widget.rememberDevice) {
-        unawaited(clearRememberedLogin());
-        widget.onRememberCleared?.call();
-      }
 
+      // 통신 오류는 PIN 오류가 아니므로 로그인 기억은 그대로 둡니다.
       debugPrint('[로그인 인증 통신 오류] $e');
 
       if (!mounted) return;
@@ -2990,6 +3010,9 @@ class _WorkPageState extends State<WorkPage>
 
   void applyAttendance(Map<String, dynamic> attendance) {
     _syncServerClock(attendance);
+    // 되돌릴 때 예전 서버 시각으로 시계 보정이 바뀌지 않도록 serverNowMs는 빼고 보관합니다.
+    _lastServerAttendance = Map<String, dynamic>.from(attendance)
+      ..remove('serverNowMs');
 
     final status =
         attendance['status']?.toString() ?? 'NOT_IN';
@@ -3101,11 +3124,14 @@ class _WorkPageState extends State<WorkPage>
         attendanceActionQueued ||
         isPasswordChanging ||
         backgroundStatusInFlight ||
+        logoutInProgress ||
+        _authenticationLostHandled ||
         attendanceStatus == 'COMPLETED') {
       return;
     }
 
     backgroundStatusInFlight = true;
+    final actionEpoch = _attendanceActionEpoch;
 
     try {
       final data = await callApi({
@@ -3118,6 +3144,12 @@ class _WorkPageState extends State<WorkPage>
       if (!mounted) return;
 
       if (data['success'] != true) {
+        // 서버가 PIN을 명시적으로 거부했다면 연결 문제로 세지 않고, 예전 PIN으로
+        // 자동 조회를 반복하지 않도록 즉시 멈추고 다시 로그인하게 합니다.
+        if (data['code'] == 'INVALID_CREDENTIALS' && data['retryable'] != true) {
+          _handleAuthenticationLost(data['message']?.toString());
+          return;
+        }
         _recordBackgroundStatusFailure();
         return;
       }
@@ -3127,6 +3159,14 @@ class _WorkPageState extends State<WorkPage>
       // status 요청을 보낸 뒤 사용자가 출퇴근을 시작했다면
       // 정상 응답이어도 늦게 도착한 값으로 사용자의 진행 중 화면을 덮지 않습니다.
       if (attendanceActionQueued || isProcessing) {
+        return;
+      }
+
+      // 이 응답이 출발한 뒤 출퇴근 요청이 시작됐거나(이미 끝났더라도) 로그아웃·인증 정리가
+      // 시작됐다면, 이전 시점의 상태이므로 화면에 반영하지 않습니다.
+      if (actionEpoch != _attendanceActionEpoch ||
+          logoutInProgress ||
+          _authenticationLostHandled) {
         return;
       }
 
@@ -3426,7 +3466,9 @@ class _WorkPageState extends State<WorkPage>
         statusBeforeClockIn != 'VERIFYING') {
       _reportClockIn('CLOCK_IN_SKIPPED', code: 'STATUS_CHANGED');
       unawaited(clearPendingClockIn(widget.employeeId));
-      _restoreAfterUnconfirmedClockIn();
+      // 확인창이 열린 사이 서버가 다른 상태(예: 이미 근무중)를 알려준 경우입니다.
+      // 미출근으로 단정하지 않고 서버가 마지막으로 확인한 상태를 보여줍니다.
+      _restoreLastServerAttendance();
       return;
     }
 
@@ -3535,7 +3577,9 @@ class _WorkPageState extends State<WorkPage>
 
       if (!mounted) return;
 
-      if (isProcessing || attendanceStatus != 'COMPLETED') {
+      if (isProcessing ||
+          attendanceStatus != 'COMPLETED' ||
+          !clockOutQueuedAfterClockIn) {
         _reportClockOut('CLOCK_OUT_SKIPPED', code: 'CLOCKIN_SAVE_PENDING');
         setState(() {
           clockOutQueuedAfterClockIn = false;
@@ -3569,6 +3613,14 @@ class _WorkPageState extends State<WorkPage>
       attendanceActionQueued = false;
       return;
     }
+
+    // 5분 안의 재시도는 같은 requestId(같은 특이사항)를 다시 보내 멱등성을 지킵니다.
+    // 그 사이 특이사항을 고쳤다면 이전 요청이 서버에 저장됐는지 먼저 확인합니다.
+    if (isLoginVerified &&
+        !await _prepareEditedClockOutNote(noteController.text.trim())) {
+      return;
+    }
+    if (!mounted) return;
 
     await savePendingClockOut(
       employeeId: widget.employeeId,
@@ -3853,6 +3905,198 @@ class _WorkPageState extends State<WorkPage>
     _startStatusRefresh();
   }
 
+  // 서버가 마지막으로 확인한 상태로 화면을 되돌립니다. 확인된 상태가 없을 때만 미출근으로 되돌립니다.
+  void _restoreLastServerAttendance() {
+    if (!mounted) return;
+
+    final snapshot = _lastServerAttendance;
+    if (snapshot == null || !isLoginVerified) {
+      _restoreAfterUnconfirmedClockIn();
+      return;
+    }
+
+    setState(() {
+      applyAttendance(Map<String, dynamic>.from(snapshot));
+      isProcessing = false;
+      attendanceActionQueued = false;
+      clockOutQueuedAfterClockIn = false;
+    });
+  }
+
+  // 출퇴근 요청이 서버 상태와 맞지 않아 거절됐을 때 실제 서버 상태를 한 번 받아 화면에 적용합니다.
+  // 확인에 성공했을 때만 true이며, 새 출퇴근 요청은 만들지 않습니다.
+  Future<bool> _syncStatusFromServer() async {
+    try {
+      final data = await callApi({
+        'action': 'status',
+        'employeeId': widget.employeeId,
+        'password': currentPassword,
+        'selectedStore': widget.store,
+      });
+
+      if (!mounted) return false;
+
+      if (data['success'] != true) {
+        if (data['code'] == 'INVALID_CREDENTIALS' && data['retryable'] != true) {
+          _handleAuthenticationLost(data['message']?.toString());
+        }
+        return false;
+      }
+
+      final attendance = Map<String, dynamic>.from(
+        data['attendance'] ?? {},
+      );
+
+      unawaited(
+        saveLastConfirmedAttendance(
+          employeeId: widget.employeeId,
+          store: widget.store,
+          attendance: attendance,
+        ),
+      );
+
+      setState(() {
+        applyAttendance(attendance);
+        isProcessing = false;
+        attendanceActionQueued = false;
+        clockOutQueuedAfterClockIn = false;
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 서버가 현재 PIN을 명시적으로 거부했을 때(관리자 PIN 재설정 등) 한 번만 실행합니다.
+  // 예전 PIN으로 자동 조회를 반복하지 않도록 조회를 멈추고, 로그인 인증 실패와 같은 기준으로
+  // 이 직원의 검증값·대기 요청·로그인 기억만 정리한 뒤 로그인 화면으로 돌아갑니다.
+  // 네트워크 오류와 5xx(retryable)는 여기로 오지 않습니다.
+  void _handleAuthenticationLost(String? message) {
+    if (!mounted || _authenticationLostHandled) return;
+    _authenticationLostHandled = true;
+
+    _stopStatusRefresh();
+    resumeStatusTimer?.cancel();
+    calendarRetryTimer?.cancel();
+
+    unawaited(clearVerifiedPassword(widget.employeeId));
+    unawaited(clearPendingClockIn(widget.employeeId));
+    unawaited(clearPendingClockOut(widget.employeeId));
+
+    if (widget.rememberDevice) {
+      unawaited(clearRememberedLogin());
+      widget.onRememberCleared?.call();
+    }
+
+    setState(() {
+      isProcessing = false;
+      attendanceActionQueued = false;
+      clockOutQueuedAfterClockIn = false;
+      clockInQueuedAfterClockOut = false;
+    });
+
+    _showAttendanceMessage(
+      message ?? '로그인 정보가 변경되었습니다. 다시 로그인해 주세요.',
+    );
+
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop('loginInvalid');
+    }
+  }
+
+  // true면 퇴근 요청을 이어서 보냅니다. 남아 있는 이전 퇴근 요청과 특이사항이 다를 때만 확인하며,
+  // 서버에서 근무가 아직 열려 있을 때(이전 요청이 저장되지 않음)만 이전 요청을 지워 새 특이사항으로
+  // 새 요청을 만들게 합니다. 이미 저장됐거나 확인하지 못하면 새 요청을 만들지 않고 안내합니다.
+  Future<bool> _prepareEditedClockOutNote(String note) async {
+    final intent = await _readAttendanceIntentForDiag(
+      'clockOut',
+      widget.employeeId,
+    );
+    if (!mounted) return false;
+    if (intent == null ||
+        intent['store']?.toString() != widget.store ||
+        (intent['note']?.toString() ?? '') == note) {
+      return true;
+    }
+
+    final ageMs = DateTime.now().millisecondsSinceEpoch -
+        (_toInt(intent['createdAtMs']) ?? 0);
+    // 5분이 지난 요청은 어차피 새 requestId로 바뀝니다.
+    if (ageMs < 0 || ageMs > 300000) return true;
+
+    setState(() {
+      isProcessing = true;
+    });
+
+    Map<String, dynamic>? attendance;
+    try {
+      final data = await callApi({
+        'action': 'status',
+        'employeeId': widget.employeeId,
+        'password': currentPassword,
+        'selectedStore': widget.store,
+      });
+      if (data['success'] == true) {
+        attendance = Map<String, dynamic>.from(data['attendance'] ?? {});
+      } else if (data['code'] == 'INVALID_CREDENTIALS' &&
+          data['retryable'] != true) {
+        _handleAuthenticationLost(data['message']?.toString());
+        return false;
+      }
+    } catch (_) {}
+
+    if (!mounted) return false;
+
+    final status = attendance?['status']?.toString();
+
+    if (attendance == null || status == null) {
+      setState(() {
+        isProcessing = false;
+        attendanceActionQueued = false;
+      });
+      _showAttendanceMessage(
+        '이전 퇴근 요청 결과를 확인하지 못해 수정한 특이사항으로 보낼 수 없습니다. 잠시 후 다시 시도해 주세요.',
+      );
+      return false;
+    }
+
+    final confirmed = attendance;
+    unawaited(
+      saveLastConfirmedAttendance(
+        employeeId: widget.employeeId,
+        store: widget.store,
+        attendance: confirmed,
+      ),
+    );
+
+    if (status == 'WORKING') {
+      // 근무가 아직 열려 있으면 이전 퇴근 요청은 서버에 저장되지 않은 것입니다.
+      await clearPendingClockOut(widget.employeeId);
+      if (!mounted) return false;
+
+      setState(() {
+        applyAttendance(confirmed);
+        isProcessing = false;
+      });
+      return true;
+    }
+
+    // 근무가 이미 끝나 있으면 이전 퇴근 요청이 저장된 것입니다. 새 특이사항은 보내지 않습니다.
+    await clearPendingClockOut(widget.employeeId);
+    if (!mounted) return false;
+
+    setState(() {
+      applyAttendance(confirmed);
+      isProcessing = false;
+      attendanceActionQueued = false;
+    });
+    _showAttendanceMessage(
+      '이전 퇴근 요청이 이미 저장되어 수정한 특이사항은 반영되지 않았습니다.',
+    );
+    return false;
+  }
+
   void _showClockOutPending() {
     final shouldStartCompletedView = attendanceStatus != 'COMPLETED';
     final now = _serverNow();
@@ -3966,6 +4210,11 @@ class _WorkPageState extends State<WorkPage>
           _restoreAfterUnconfirmedClockIn();
         } else {
           _restoreAfterUnconfirmedClockOut(noteBackup);
+        }
+
+        if (data['code'] == 'INVALID_CREDENTIALS' && data['retryable'] != true) {
+          _handleAuthenticationLost(data['message']?.toString());
+          return;
         }
 
         _showAttendanceMessage(
@@ -4133,6 +4382,9 @@ class _WorkPageState extends State<WorkPage>
       return;
     }
 
+    // 이 출근 요청보다 먼저 출발한 자동 status 응답은 화면에 반영하지 않습니다.
+    _attendanceActionEpoch += 1;
+
     if (showPending) {
       _showClockInPending();
     }
@@ -4206,18 +4458,78 @@ class _WorkPageState extends State<WorkPage>
         }
 
         unawaited(clearPendingClockIn(widget.employeeId));
+
+        final code = data['code']?.toString();
+        final message = data['message']?.toString() ?? '출근 처리에 실패했습니다.';
+
+        if (code == 'INVALID_CREDENTIALS' || code == 'AUTH_CHANGED') {
+          _restoreLastServerAttendance();
+          _handleAuthenticationLost(message);
+          return;
+        }
+
+        // 서버 상태가 이 화면과 다르다는 거절입니다(다른 기기에서 이미 출근 등).
+        // 안내는 그대로 하되 미출근으로 단정하지 않고 서버 상태를 다시 받아 적용합니다.
+        if (code == 'ALREADY_WORKING' ||
+            code == 'RECORD_CHANGED' ||
+            code == 'REQUEST_REUSED') {
+          _showAttendanceMessage(message);
+          final synced = await _syncStatusFromServer();
+          if (synced || !mounted || _authenticationLostHandled) return;
+
+          if (code == 'ALREADY_WORKING') {
+            // 서버가 근무중이라고 확정했으므로 근무중 화면을 유지하고 곧 다시 확인합니다.
+            setState(() {
+              isProcessing = false;
+              attendanceActionQueued = false;
+              clockOutQueuedAfterClockIn = false;
+            });
+            _startStatusRefresh();
+            _scheduleResumeStatusRefresh();
+          } else {
+            _restoreAfterUnconfirmedClockIn();
+          }
+          return;
+        }
+
         _restoreAfterUnconfirmedClockIn();
 
-        _showAttendanceMessage(
-          data['message']?.toString() ??
-              '출근 처리에 실패했습니다.',
-        );
+        _showAttendanceMessage(message);
         return;
       }
 
       final attendance = Map<String, dynamic>.from(
         data['attendance'] ?? {},
       );
+
+      // 같은 requestId의 예전 출근이 다시 응답된 것(duplicate)인데 지금 서버가 근무중이 아니라면
+      // 이번 출근은 저장되지 않은 것입니다. 성공 알림 없이 현재 상태를 보여주고,
+      // 다음 출근은 새 요청으로 보내도록 이전 요청을 정리합니다.
+      if (data['duplicate'] == true &&
+          attendance['status']?.toString() != 'WORKING') {
+        await clearPendingClockIn(widget.employeeId);
+        if (!mounted) return;
+
+        unawaited(
+          saveLastConfirmedAttendance(
+            employeeId: widget.employeeId,
+            store: widget.store,
+            attendance: attendance,
+          ),
+        );
+
+        setState(() {
+          applyAttendance(attendance);
+          isProcessing = false;
+          attendanceActionQueued = false;
+          clockOutQueuedAfterClockIn = false;
+        });
+
+        _showAttendanceMessage(
+          '이전 출근 요청은 이미 처리되어 있었습니다. 출근하려면 다시 눌러 주세요.',
+        );
+        return;
+      }
 
       unawaited(clearPendingClockIn(widget.employeeId));
 
@@ -4291,6 +4603,9 @@ class _WorkPageState extends State<WorkPage>
       );
       return;
     }
+
+    // 이 퇴근 요청보다 먼저 출발한 자동 status 응답은 화면에 반영하지 않습니다.
+    _attendanceActionEpoch += 1;
 
     final noteBackup = recoveryNote ?? noteController.text.trim();
 
@@ -4373,16 +4688,56 @@ class _WorkPageState extends State<WorkPage>
         unawaited(clearPendingClockOut(widget.employeeId));
         _restoreAfterUnconfirmedClockOut(noteBackup);
 
-        _showAttendanceMessage(
-          data['message']?.toString() ??
-              '퇴근 처리에 실패했습니다.',
-        );
+        final code = data['code']?.toString();
+        final message = data['message']?.toString() ?? '퇴근 처리에 실패했습니다.';
+
+        if (code == 'INVALID_CREDENTIALS' || code == 'AUTH_CHANGED') {
+          _handleAuthenticationLost(message);
+          return;
+        }
+
+        _showAttendanceMessage(message);
+
+        // 서버 상태가 이 화면과 다르다는 거절이면 실제 서버 상태를 다시 받아 적용합니다.
+        if (code == 'RECORD_CHANGED' || code == 'REQUEST_REUSED') {
+          await _syncStatusFromServer();
+        }
         return;
       }
 
       final attendance = Map<String, dynamic>.from(
         data['attendance'] ?? {},
       );
+
+      // 같은 requestId의 예전 퇴근이 다시 응답된 것(duplicate)인데 지금 서버에 근무가 열려 있다면
+      // 이번 퇴근은 저장되지 않은 것입니다. 성공 알림 없이 현재 근무중 상태와 특이사항을 그대로 두고,
+      // 다음 퇴근은 새 요청으로 보내도록 이전 요청을 정리합니다. 퇴근 요청을 다시 만들지는 않습니다.
+      if (data['duplicate'] == true &&
+          attendance['status']?.toString() == 'WORKING') {
+        await clearPendingClockOut(widget.employeeId);
+        if (!mounted) return;
+
+        unawaited(
+          saveLastConfirmedAttendance(
+            employeeId: widget.employeeId,
+            store: widget.store,
+            attendance: attendance,
+          ),
+        );
+
+        setState(() {
+          applyAttendance(attendance);
+          isProcessing = false;
+          attendanceActionQueued = false;
+          clockOutQueuedAfterClockIn = false;
+        });
+        noteController.text = noteBackup;
+
+        _showAttendanceMessage(
+          '이전 퇴근 요청은 이미 처리되어 있었습니다. 현재 근무중이니 퇴근하려면 다시 눌러 주세요.',
+        );
+        return;
+      }
 
       unawaited(clearPendingClockOut(widget.employeeId));
 

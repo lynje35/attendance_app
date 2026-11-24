@@ -96,8 +96,24 @@ void main() {
     final adapter = bridge();
     expect((await adapter.send(body('clockIn')))['success'], false);
     await adapter.prepareIntent('clockOut', 'test', 'store');
-    expect((await adapter.send(body('clockOut')))['success'], false);
-    expect(requests, isEmpty);
+    // The only request allowed is the read-only status lookup of the open shift; here nothing is open.
+    response = (_) async => json({'success': true, 'attendance': {'status': 'NOT_IN'}});
+    final failed = await adapter.send(body('clockOut'));
+    expect([failed['success'], failed['code'], failed['localOnly']], [false, 'RECORD_ID_MISSING', true]);
+    expect(requests.map((r) => r['action']), ['status']);
+  });
+  test('checkout confirmed before the launch status was cached looks up the open shift once and keeps the same requestId', () async {
+    final adapter = bridge();
+    const key = 'employee_server_preview_request_clockOut_test';
+    await adapter.prepareIntent('clockOut', 'test', 'store', note: 'memo');
+    final requestId = Map<String, dynamic>.from(jsonDecode(storage[key]!))['requestId'];
+    final result = await adapter.send(body('clockOut'));
+    expect(result['success'], true);
+    expect(requests.map((r) => r['action']), ['status', 'clockOut']);
+    expect(requests.last['recordId'], 'shift-a');
+    expect(requests.last['requestId'], requestId);
+    expect(requests.last['note'], 'memo');
+    expect(requests.first['actionToken'], 'ignored');
   });
   test('clearing a completed request permits a fresh request and sequential new shift', () async {
     final adapter = bridge();

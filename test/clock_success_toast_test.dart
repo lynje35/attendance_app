@@ -205,7 +205,10 @@ void main() {
 
   testWidgets('the server answered success for a request it had already saved (duplicate): that is a confirmed save, the notice shows', (tester) async {
     final fake = install({'status': 'NOT_IN'});
-    fake.clockIn = (body) => {'success': true, 'requestId': body['requestId'], 'duplicate': true, 'attendance': working()};
+    fake.clockIn = (body) {
+      fake.status = working(); // the earlier save opened the shift, so the server's status says working
+      return {'success': true, 'requestId': body['requestId'], 'duplicate': true, 'attendance': working()};
+    };
     await open(tester, {'status': 'NOT_IN'});
     await tapAndAnswer(tester, '출근하기', '확인');
     await pumpFor(tester, 600);

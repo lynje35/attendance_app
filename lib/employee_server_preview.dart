@@ -106,6 +106,27 @@ class EmployeeServerPreview {
         intent = {...intent, 'recordId': _recordIds[employee]};
         await _stored(() => write(_key(action, employee), jsonEncode(intent)));
       }
+      // Still no recordId: the app was opened and 퇴근 confirmed before the launch status reply could be
+      // cached (prepareIntent bumps the generation, so that earlier reply is discarded by design). Ask the
+      // server once, read-only, which shift is open and pin the same requestId/note to it — instead of
+      // failing locally and making the employee tap again. If it is not WORKING, fail locally as before.
+      if (action == 'clockOut' && intent != null && intent['recordId'] == null &&
+          intent['store'] == original['selectedStore'] && _recordIds[employee] == null) {
+        try {
+          final current = await _post({
+            'action': 'status', 'employeeId': employee,
+            'password': original['password'], 'selectedStore': original['selectedStore'],
+            if (original['actionToken'] != null) 'actionToken': original['actionToken'],
+          });
+          final open = current['attendance'];
+          if (current['success'] == true && open is Map && open['status'] == 'WORKING' && open['recordId'] is String) {
+            intent = {...intent, 'recordId': open['recordId']};
+            await _stored(() => write(_key(action, employee), jsonEncode(intent)));
+          }
+        } catch (_) {
+          // Falls through to the unchanged local failure below.
+        }
+      }
       if (intent == null || intent['store'] != original['selectedStore'] ||
           (action == 'clockOut' && intent['recordId'] == null)) {
         return {
